@@ -39,36 +39,29 @@ jobs:
 
       - name: Install stable Android 16 SDK
         shell: bash
-        run: |
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
 
-      - name: Restore Android project
+      - name: Validate source tree
         shell: bash
         run: |
-          rm -rf .ci-build
-          mkdir -p .ci-build
-          base64 -d scratch/phigros-android-extractor/source.zip.b64 > .ci-build/source.zip
-          unzip -q .ci-build/source.zip -d .ci-build
-          rm .ci-build/source.zip
-          sed -i 's/compileSdk 37/compileSdk 36/' .ci-build/app/build.gradle
-          sed -i 's/targetSdk 37/targetSdk 36/' .ci-build/app/build.gradle
-          test -f .ci-build/app/build.gradle
-          test -f .ci-build/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.java
-          test -f .ci-build/app/src/main/python/extractor.py
+          test -f scratch/phigros-android-extractor/app/build.gradle
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.java
+          test -f scratch/phigros-android-extractor/app/src/main/python/extractor.py
+          python -m py_compile scratch/phigros-android-extractor/app/src/main/python/extractor.py
 
       - name: Build debug APK
-        working-directory: .ci-build
+        working-directory: scratch/phigros-android-extractor
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: phigros-music-extractor-debug
-          path: .ci-build/app/build/outputs/apk/debug/app-debug.apk
+          path: scratch/phigros-android-extractor/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
