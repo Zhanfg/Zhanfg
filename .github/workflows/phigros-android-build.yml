@@ -39,7 +39,9 @@ jobs:
 
       - name: Install Android 17 compile SDK
         shell: bash
-        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0'
+        run: |
+          sdkmanager --channel=3 --list | grep -E 'platforms;android-37|build-tools;37' || true
+          sdkmanager --channel=3 'platforms;android-37' 'build-tools;37.0.0'
 
       - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v4
