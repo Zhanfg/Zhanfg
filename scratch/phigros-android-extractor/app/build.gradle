@@ -37,7 +37,7 @@ chaquopy {
         buildPython('python3.13')
         pip {
             install 'lz4'
-            install 'fsb5==1.0'
+            install './vendor/python-fsb5'
             install 'chaquopy-libogg'
             install 'chaquopy-libvorbis'
         }
