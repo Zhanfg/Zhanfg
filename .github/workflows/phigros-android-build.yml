@@ -47,6 +47,30 @@ jobs:
         with:
           gradle-version: '9.4.1'
 
+      # From this build onward, debug APKs keep one certificate instead of
+      # letting every GitHub-hosted runner generate a new random debug key.
+      # The key stays in the Actions cache and is never committed to the public repo.
+      - name: Restore stable debug signing key
+        id: debug-key-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: phigros-extractor-resume-debug-key-v1
+
+      - name: Create stable debug signing key
+        if: steps.debug-key-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -dname 'CN=Android Debug,O=Android,C=US' \
+            -keyalg RSA -keysize 2048 -validity 10000
+
       - name: Restore FFmpegKitNext arm64 cache
         id: ffmpeg-cache
         uses: actions/cache@v4
@@ -116,10 +140,12 @@ jobs:
         shell: bash
         run: |
           test -f scratch/phigros-android-extractor/app/build.gradle
-          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.kt
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/IncrementalMainActivity.kt
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/RecoveryActivity.kt
           test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/RemoteCatalog.kt
           test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/AudioProcessor.kt
           test -f scratch/phigros-android-extractor/app/src/main/python/extractor.py
+          grep -q 'bundle-fingerprint\|bundle 指纹' scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/IncrementalMainActivity.kt || true
           python -m py_compile scratch/phigros-android-extractor/app/src/main/python/extractor.py
 
       - name: Build debug APK
@@ -133,12 +159,13 @@ jobs:
           test -s "$APK"
           unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -n 80
           unzip -l "$APK" | grep -E 'libmp3lame|libavcodec|libavformat|libavutil|libffmpegkit' || true
+          keytool -printcert -jarfile "$APK" | grep -E 'Owner:|SHA256:' || true
           sha256sum "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: phigros-music-extractor-m3e-debug
+          name: phigros-music-extractor-incremental-debug
           path: scratch/phigros-android-extractor/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
