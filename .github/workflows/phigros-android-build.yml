@@ -1,0 +1,68 @@
+name: Phigros Android Extractor Build
+
+on:
+  push:
+    branches:
+      - ci/phigros-native-build
+    paths:
+      - 'scratch/phigros-android-extractor/**'
+      - '.github/workflows/phigros-android-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Set up Gradle 9.4.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.4.1'
+
+      - name: Install Android SDK 37
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+
+      - name: Restore Android project
+        shell: bash
+        run: |
+          rm -rf .ci-build
+          mkdir -p .ci-build
+          base64 -d scratch/phigros-android-extractor/source.zip.b64 > .ci-build/source.zip
+          unzip -q .ci-build/source.zip -d .ci-build
+          rm .ci-build/source.zip
+          test -f .ci-build/app/build.gradle
+          test -f .ci-build/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.java
+          test -f .ci-build/app/src/main/python/extractor.py
+
+      - name: Build debug APK
+        working-directory: .ci-build
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: phigros-music-extractor-debug
+          path: .ci-build/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
