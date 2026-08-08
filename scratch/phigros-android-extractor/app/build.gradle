@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace 'cc.axymorrsen.phigrosextractor'
-    compileSdk 36
+    compileSdk 37
 
     defaultConfig {
         applicationId 'cc.axymorrsen.phigrosextractor'
