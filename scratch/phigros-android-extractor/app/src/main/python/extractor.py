@@ -15,11 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-import lz4.block
 import fsb5
+import lz4.block
 
 CATALOG_PATH = "assets/aa/catalog.json"
 BUNDLE_PREFIX = "assets/aa/Android/"
+MANIFEST_NAME = "incremental_manifest.json"
+CURRENT_TRACKS_NAME = "current_tracks.json"
+MANIFEST_SCHEMA = 2
 
 
 class ExtractError(RuntimeError):
@@ -102,22 +105,23 @@ class LittleReader:
 
 
 class ApkSet:
-    """APK index with serialized ZipFile reads.
+    """Index multiple APK/split APK archives with serialized reads.
 
-    zipfile.ZipFile isn't guaranteed to be safe for concurrent reads from the
-    same object. The relatively short archive read is serialized, while UnityFS
-    decompression and FSB5 decoding continue in worker threads in parallel.
+    ZipFile object reads are serialized. UnityFS decompression and FSB5 rebuilds
+    run outside this lock in worker threads.
     """
 
     def __init__(self, paths: Iterable[str]):
         self.archives: List[zipfile.ZipFile] = []
         self.index: Dict[str, zipfile.ZipFile] = {}
+        self.info_index: Dict[str, zipfile.ZipInfo] = {}
         self._read_lock = threading.Lock()
         for path in paths:
             zf = zipfile.ZipFile(path, "r")
             self.archives.append(zf)
-            for name in zf.namelist():
-                self.index.setdefault(name, zf)
+            for info in zf.infolist():
+                self.index.setdefault(info.filename, zf)
+                self.info_index.setdefault(info.filename, info)
 
     def close(self) -> None:
         for zf in self.archives:
@@ -133,12 +137,30 @@ class ApkSet:
         with self._read_lock:
             return zf.read(name)
 
+    def fingerprint(self, name: str) -> str:
+        info = self.info_index.get(name)
+        if info is None:
+            return "missing"
+        # ZipInfo.CRC is the CRC-32 of the uncompressed bundle. Combining it
+        # with the uncompressed size and Addressables name gives a cheap,
+        # deterministic resource fingerprint without decompressing UnityFS.
+        return f"{Path(name).name}|{info.CRC:08x}|{info.file_size}"
+
 
 @dataclass
 class UnityBlock:
     uncompressed_size: int
     compressed_size: int
     flags: int
+
+
+@dataclass(frozen=True)
+class TrackSpec:
+    song_id: str
+    key: str
+    bundle_name: str
+    bundle_path: str
+    fingerprint: str
 
 
 COMPRESSION_MASK = 0x3F
@@ -184,7 +206,6 @@ def unpack_unityfs(bundle: bytes) -> bytes:
         r.align(16)
 
     data_start_after_header = r.pos
-
     if flags & BLOCKS_INFO_AT_END:
         info_pos = len(bundle) - compressed_info_size
         if info_pos < 0:
@@ -195,7 +216,6 @@ def unpack_unityfs(bundle: bytes) -> bytes:
         info_compressed = r.read(compressed_info_size)
 
     info = _decompress(info_compressed, flags & COMPRESSION_MASK, uncompressed_info_size)
-
     ir = ByteReader(info)
     ir.read(16)
     block_count = ir.u32be()
@@ -232,7 +252,6 @@ def parse_catalog(catalog_bytes: bytes) -> List[Tuple[str, str]]:
         key_pos = br.u32()
         if key_pos >= len(key_data):
             raise ExtractError("Addressables key offset out of range")
-
         key_type = key_data[key_pos]
         key_pos += 1
 
@@ -337,26 +356,65 @@ def _find_fsb(payload: bytes):
         start = pos + 4
 
 
+def _atomic_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _load_manifest(path: Path) -> dict:
+    if not path.is_file():
+        return {"schema": MANIFEST_SCHEMA, "tracks": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("manifest root isn't an object")
+        tracks = data.get("tracks")
+        if not isinstance(tracks, dict):
+            data["tracks"] = {}
+        return data
+    except Exception:
+        return {"schema": MANIFEST_SCHEMA, "tracks": {}}
+
+
+def _cached_file(out: Path, song_id: str, entry: Optional[dict]) -> Optional[Path]:
+    names: List[str] = []
+    if isinstance(entry, dict):
+        filename = entry.get("filename")
+        if isinstance(filename, str) and filename:
+            names.append(filename)
+    names.extend([
+        f"{_safe_filename(song_id)}.ogg",
+        f"{_safe_filename(song_id)}.mp3",
+        f"{_safe_filename(song_id)}.wav",
+    ])
+    seen = set()
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        candidate = out / name
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    return None
+
+
 def _extract_one(
     apks: ApkSet,
     out: Path,
-    key: str,
-    bundle_name: str,
+    spec: TrackSpec,
     logger: ProgressLogger,
-) -> Tuple[bool, str]:
-    song_id = key[:-12]
-    bundle_path = BUNDLE_PREFIX + bundle_name
-
-    if not apks.exists(bundle_path):
-        message = f"{song_id}: bundle missing: {bundle_path}"
+) -> Tuple[bool, str, Optional[dict]]:
+    if not apks.exists(spec.bundle_path):
+        message = f"{spec.song_id}: bundle missing: {spec.bundle_path}"
         logger.log(f"[跳过] {message}")
-        return False, message
+        return False, message, None
 
     started = time.monotonic()
-    logger.log(f"[解析] {song_id}")
-
+    logger.log(f"[解析] {spec.song_id}")
     try:
-        bundle = apks.read(bundle_path)
+        bundle = apks.read(spec.bundle_path)
         payload = unpack_unityfs(bundle)
         bank = _find_fsb(payload)
         if bank is None:
@@ -368,7 +426,7 @@ def _extract_one(
             raise ExtractError(f"Unsupported audio format: {bank.header.mode}")
 
         rebuilt = bank.rebuild_sample(sample)
-        destination = out / f"{_safe_filename(song_id)}.{ext}"
+        destination = out / f"{_safe_filename(spec.song_id)}.{ext}"
         tmp = destination.with_suffix(destination.suffix + ".part")
         tmp.write_bytes(rebuilt)
         os.replace(tmp, destination)
@@ -377,11 +435,20 @@ def _extract_one(
         logger.log(
             f"[完成] {destination.name}  {len(rebuilt) / (1024 * 1024):.2f} MiB  {elapsed:.2f}s"
         )
-        return True, destination.name
+        return True, destination.name, {
+            "song_id": spec.song_id,
+            "key": spec.key,
+            "bundle_name": spec.bundle_name,
+            "fingerprint": spec.fingerprint,
+            "filename": destination.name,
+            "size": len(rebuilt),
+            "active": True,
+            "updated_at": int(time.time()),
+        }
     except Exception as exc:
-        message = f"{song_id}: {exc}"
+        message = f"{spec.song_id}: {exc}"
         logger.log(f"[失败] {message}")
-        return False, message
+        return False, message, None
 
 
 def extract_from_apks(
@@ -390,80 +457,203 @@ def extract_from_apks(
     native_lib_dir: str,
     progress_log_path: Optional[str] = None,
     worker_count: int = 4,
+    game_version: str = "",
+    trust_existing_without_manifest: bool = False,
 ) -> int:
+    """Incrementally refresh the persistent OGG cache.
+
+    Existing tracks are reused when their Addressables bundle fingerprint is
+    unchanged. New tracks are extracted, changed tracks are replaced, and
+    removed tracks are retained in the historical cache but marked inactive.
+
+    trust_existing_without_manifest is only for bootstrapping an already
+    completed cache from the *same* installed Phigros version. It records the
+    current fingerprints without rebuilding those OGG files.
+    """
+
     apk_paths = [x.strip() for x in apk_paths_text.splitlines() if x.strip()]
     if not apk_paths:
         raise ExtractError("No APK paths were provided")
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for old in out.iterdir():
-        if old.is_file():
+    for old in out.glob("*.part"):
+        try:
             old.unlink()
+        except OSError:
+            pass
+
+    checkpoint_root = out.parent
+    manifest_path = checkpoint_root / MANIFEST_NAME
+    current_tracks_path = checkpoint_root / CURRENT_TRACKS_NAME
+    manifest = _load_manifest(manifest_path)
+    previous_tracks = manifest.get("tracks", {})
 
     logger = ProgressLogger(progress_log_path)
-    apks = None
-
+    apks: Optional[ApkSet] = None
     try:
-        logger.log(f"[准备] APK 数量：{len(apk_paths)}")
+        logger.log(f"[准备] APK 数量：{len(apk_paths)}；游戏版本：{game_version or '<unknown>'}")
         _configure_fsb_native_libs(native_lib_dir)
-
         apks = ApkSet(apk_paths)
         if not apks.exists(CATALOG_PATH):
             raise ExtractError(f"Missing {CATALOG_PATH}")
 
-        logger.log("[目录] 正在解析 Addressables catalog")
+        logger.log("[目录] 正在解析 Addressables catalog / 增量指纹")
         rows = parse_catalog(apks.read(CATALOG_PATH))
-
-        # Catalogs can contain repeated references. Deduplicate by track key so
-        # worker threads never race on the same output filename.
         seen_keys = set()
-        music_rows: List[Tuple[str, str]] = []
-        for key, value in rows:
+        specs: List[TrackSpec] = []
+        for key, bundle_name in rows:
             if not key.endswith(".0/music.wav") or key in seen_keys:
                 continue
             seen_keys.add(key)
-            music_rows.append((key, value))
+            song_id = key[:-12]
+            bundle_path = BUNDLE_PREFIX + bundle_name
+            specs.append(
+                TrackSpec(
+                    song_id=song_id,
+                    key=key,
+                    bundle_name=bundle_name,
+                    bundle_path=bundle_path,
+                    fingerprint=apks.fingerprint(bundle_path),
+                )
+            )
 
-        if not music_rows:
+        if not specs:
             raise ExtractError("No Phigros music entries found in Addressables catalog")
 
-        requested_workers = max(1, int(worker_count or 1))
-        workers = min(requested_workers, len(music_rows))
-        logger.log(f"[并发] 发现 {len(music_rows)} 首，启动 {workers} 个解析线程")
+        current_ids = {spec.song_id for spec in specs}
+        reused = 0
+        baseline = 0
+        new_count = 0
+        changed_count = 0
+        todo: List[TrackSpec] = []
+        active_entries: Dict[str, dict] = {}
+
+        for spec in specs:
+            prev = previous_tracks.get(spec.song_id)
+            cached = _cached_file(out, spec.song_id, prev if isinstance(prev, dict) else None)
+            same_fingerprint = (
+                isinstance(prev, dict)
+                and prev.get("fingerprint") == spec.fingerprint
+                and spec.fingerprint != "missing"
+            )
+
+            if cached is not None and same_fingerprint:
+                entry = dict(prev)
+                entry.update({
+                    "song_id": spec.song_id,
+                    "key": spec.key,
+                    "bundle_name": spec.bundle_name,
+                    "fingerprint": spec.fingerprint,
+                    "filename": cached.name,
+                    "size": cached.stat().st_size,
+                    "active": True,
+                })
+                active_entries[spec.song_id] = entry
+                reused += 1
+                continue
+
+            if (
+                cached is not None
+                and not isinstance(prev, dict)
+                and bool(trust_existing_without_manifest)
+                and spec.fingerprint != "missing"
+            ):
+                active_entries[spec.song_id] = {
+                    "song_id": spec.song_id,
+                    "key": spec.key,
+                    "bundle_name": spec.bundle_name,
+                    "fingerprint": spec.fingerprint,
+                    "filename": cached.name,
+                    "size": cached.stat().st_size,
+                    "active": True,
+                    "updated_at": int(time.time()),
+                }
+                baseline += 1
+                continue
+
+            if isinstance(prev, dict):
+                changed_count += 1
+            else:
+                new_count += 1
+            todo.append(spec)
+
+        removed_ids = set(previous_tracks.keys()) - current_ids
+        logger.log(
+            f"[增量] 当前 {len(specs)} 首：复用 {reused}，基线接管 {baseline}，"
+            f"新增 {new_count}，资源变化 {changed_count}，当前版本移除 {len(removed_ids)}"
+        )
 
         extracted = 0
         failures: List[str] = []
         started = time.monotonic()
+        if todo:
+            requested_workers = max(1, int(worker_count or 1))
+            workers = min(requested_workers, len(todo))
+            logger.log(f"[并发] 仅需实际解包 {len(todo)} 首，启动 {workers} 个解析线程")
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="phigros") as pool:
+                futures = [pool.submit(_extract_one, apks, out, spec, logger) for spec in todo]
+                completed = 0
+                for future in as_completed(futures):
+                    ok, detail, entry = future.result()
+                    completed += 1
+                    if ok and entry is not None:
+                        extracted += 1
+                        active_entries[entry["song_id"]] = entry
+                    else:
+                        failures.append(detail)
+                    logger.log(
+                        f"[进度] {completed}/{len(todo)}，新提取 {extracted}，失败 {len(failures)}"
+                    )
+        else:
+            logger.log("[增量] 音频资源没有变化：0 首需要重新解包。")
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="phigros") as pool:
-            futures = [
-                pool.submit(_extract_one, apks, out, key, bundle_name, logger)
-                for key, bundle_name in music_rows
-            ]
-            completed = 0
-            for future in as_completed(futures):
-                ok, detail = future.result()
-                completed += 1
-                if ok:
-                    extracted += 1
-                else:
-                    failures.append(detail)
-                logger.log(f"[进度] {completed}/{len(music_rows)}，成功 {extracted}，失败 {len(failures)}")
+        # Preserve historical records and files for removed tracks, but never
+        # present them as current-version output candidates.
+        merged_tracks: Dict[str, dict] = {}
+        for song_id, old_entry in previous_tracks.items():
+            if not isinstance(old_entry, dict):
+                continue
+            copied = dict(old_entry)
+            copied["active"] = song_id in current_ids and song_id in active_entries
+            if song_id in removed_ids:
+                copied["active"] = False
+                copied["removed_in_version"] = game_version
+            merged_tracks[song_id] = copied
+        merged_tracks.update(active_entries)
+
+        manifest = {
+            "schema": MANIFEST_SCHEMA,
+            "game_version": game_version,
+            "updated_at": int(time.time()),
+            "track_count_in_game": len(specs),
+            "active_cached_count": len(active_entries),
+            "tracks": merged_tracks,
+        }
+        _atomic_json(manifest_path, manifest)
+
+        # Only current-version, valid cached songs are exposed to the Android
+        # transcode stage. Historical/removed OGG files remain on disk only.
+        ordered_active = [spec.song_id for spec in specs if spec.song_id in active_entries]
+        _atomic_json(current_tracks_path, ordered_active)
 
         elapsed = time.monotonic() - started
         logger.log(
-            f"[汇总] 解析结束：成功 {extracted}，失败 {len(failures)}，耗时 {elapsed:.2f}s"
+            f"[汇总] 增量结束：当前可用 {len(ordered_active)}/{len(specs)}，"
+            f"实际解包 {extracted}，复用 {reused + baseline}，失败 {len(failures)}，耗时 {elapsed:.2f}s"
         )
 
-        if extracted == 0:
+        if not ordered_active:
             detail = "\n".join(failures[:8])
-            raise ExtractError("No songs could be extracted" + ("\n" + detail if detail else ""))
+            raise ExtractError("No current songs are available" + ("\n" + detail if detail else ""))
 
+        failure_file = checkpoint_root / "_partial_failures.txt"
         if failures:
-            (out / "_partial_failures.txt").write_text("\n".join(failures), encoding="utf-8")
+            failure_file.write_text("\n".join(failures), encoding="utf-8")
+        elif failure_file.exists():
+            failure_file.unlink()
 
-        return extracted
+        return len(ordered_active)
     finally:
         if apks is not None:
             apks.close()
