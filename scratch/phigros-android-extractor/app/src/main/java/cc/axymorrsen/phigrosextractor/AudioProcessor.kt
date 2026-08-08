@@ -79,6 +79,12 @@ object AudioProcessor {
                     "为防止静默降级，本曲已停止转换，请改选 FLAC。"
             )
         }
+        if (format == OutputFormat.FLAC && source.effectiveBits > 24) {
+            throw IllegalStateException(
+                "检测到 ${source.effectiveBits}-bit 源。标准 FLAC 最高保存 24-bit PCM；" +
+                    "为避免把 32-bit/float 源静默截断，本曲已停止转换。"
+            )
+        }
 
         outputFile.parentFile?.mkdirs()
         val temp = File(
@@ -149,9 +155,10 @@ object AudioProcessor {
                     args += source.channels.toString()
                 }
                 if (source.isHiRes) {
-                    // Vorbis itself has no PCM bit-depth field. For high-rate or
-                    // genuinely >16-bit sources, use the FLAC encoder's s32 path
-                    // so decoded precision isn't truncated to 16-bit on export.
+                    // Vorbis has no conventional PCM bit-depth field. For a
+                    // high-rate source (or a true >16-bit PCM source), use the
+                    // FLAC encoder's 24-bit-capable s32 path so the export is
+                    // never silently truncated to 16-bit.
                     args += "-sample_fmt"
                     args += "s32"
                 }
@@ -168,8 +175,8 @@ object AudioProcessor {
             }
         }
 
-        // Preserve every metadata field already present in the rebuilt source,
-        // then override/add authoritative Phigros fields below.
+        // Preserve every tag that may already be present on the source stream,
+        // then override/add the authoritative Phigros fields below.
         args += "-map_metadata"
         args += "0"
 
@@ -180,8 +187,8 @@ object AudioProcessor {
         }
         if (meta.chapter.isNotBlank()) {
             // Phigros exposes chapter rather than a conventional album field.
-            // Mirroring chapter into ALBUM makes normal music libraries group it
-            // correctly while GROUPING retains the original semantic meaning.
+            // Mirroring chapter into ALBUM makes ordinary music libraries group
+            // tracks usefully while GROUPING retains the original semantics.
             addMetadata(args, "album", meta.chapter)
             addMetadata(args, "grouping", meta.chapter)
             addMetadata(args, "chapter", meta.chapter)
@@ -198,6 +205,9 @@ object AudioProcessor {
         }
         if (source.effectiveBits > 0) {
             addMetadata(args, "source_bits_per_sample", source.effectiveBits.toString())
+        }
+        if (source.bitRate > 0) {
+            addMetadata(args, "source_bitrate", source.bitRate.toString())
         }
         if (meta.songKey.isNotBlank()) addMetadata(args, "song_key", meta.songKey)
         if (meta.songTitle.isNotBlank()) addMetadata(args, "song_title", meta.songTitle)
