@@ -7,10 +7,13 @@ import json
 import lzma
 import os
 import struct
+import threading
+import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import lz4.block
 import fsb5
@@ -21,6 +24,33 @@ BUNDLE_PREFIX = "assets/aa/Android/"
 
 class ExtractError(RuntimeError):
     pass
+
+
+class ProgressLogger:
+    """Thread-safe line logger which can be tailed by the Android UI."""
+
+    def __init__(self, path: Optional[str]):
+        self._lock = threading.Lock()
+        self._stream = None
+        if path:
+            log_path = Path(path)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._stream = log_path.open("w", encoding="utf-8", buffering=1)
+
+    def log(self, message: str) -> None:
+        if self._stream is None:
+            return
+        timestamp = time.strftime("%H:%M:%S")
+        with self._lock:
+            self._stream.write(f"{timestamp} {message}\n")
+            self._stream.flush()
+
+    def close(self) -> None:
+        if self._stream is None:
+            return
+        with self._lock:
+            self._stream.close()
+            self._stream = None
 
 
 class ByteReader:
@@ -72,9 +102,17 @@ class LittleReader:
 
 
 class ApkSet:
+    """APK index with serialized ZipFile reads.
+
+    zipfile.ZipFile isn't guaranteed to be safe for concurrent reads from the
+    same object. The relatively short archive read is serialized, while UnityFS
+    decompression and FSB5 decoding continue in worker threads in parallel.
+    """
+
     def __init__(self, paths: Iterable[str]):
         self.archives: List[zipfile.ZipFile] = []
         self.index: Dict[str, zipfile.ZipFile] = {}
+        self._read_lock = threading.Lock()
         for path in paths:
             zf = zipfile.ZipFile(path, "r")
             self.archives.append(zf)
@@ -92,7 +130,8 @@ class ApkSet:
         zf = self.index.get(name)
         if zf is None:
             raise KeyError(name)
-        return zf.read(name)
+        with self._read_lock:
+            return zf.read(name)
 
 
 @dataclass
@@ -298,7 +337,60 @@ def _find_fsb(payload: bytes):
         start = pos + 4
 
 
-def extract_from_apks(apk_paths_text: str, output_dir: str, native_lib_dir: str) -> int:
+def _extract_one(
+    apks: ApkSet,
+    out: Path,
+    key: str,
+    bundle_name: str,
+    logger: ProgressLogger,
+) -> Tuple[bool, str]:
+    song_id = key[:-12]
+    bundle_path = BUNDLE_PREFIX + bundle_name
+
+    if not apks.exists(bundle_path):
+        message = f"{song_id}: bundle missing: {bundle_path}"
+        logger.log(f"[跳过] {message}")
+        return False, message
+
+    started = time.monotonic()
+    logger.log(f"[解析] {song_id}")
+
+    try:
+        bundle = apks.read(bundle_path)
+        payload = unpack_unityfs(bundle)
+        bank = _find_fsb(payload)
+        if bank is None:
+            raise ExtractError("FSB5 payload not found")
+
+        sample = bank.samples[0]
+        ext = bank.get_sample_extension()
+        if ext not in ("ogg", "mp3", "wav"):
+            raise ExtractError(f"Unsupported audio format: {bank.header.mode}")
+
+        rebuilt = bank.rebuild_sample(sample)
+        destination = out / f"{_safe_filename(song_id)}.{ext}"
+        tmp = destination.with_suffix(destination.suffix + ".part")
+        tmp.write_bytes(rebuilt)
+        os.replace(tmp, destination)
+
+        elapsed = time.monotonic() - started
+        logger.log(
+            f"[完成] {destination.name}  {len(rebuilt) / (1024 * 1024):.2f} MiB  {elapsed:.2f}s"
+        )
+        return True, destination.name
+    except Exception as exc:
+        message = f"{song_id}: {exc}"
+        logger.log(f"[失败] {message}")
+        return False, message
+
+
+def extract_from_apks(
+    apk_paths_text: str,
+    output_dir: str,
+    native_lib_dir: str,
+    progress_log_path: Optional[str] = None,
+    worker_count: int = 4,
+) -> int:
     apk_paths = [x.strip() for x in apk_paths_text.splitlines() if x.strip()]
     if not apk_paths:
         raise ExtractError("No APK paths were provided")
@@ -309,48 +401,60 @@ def extract_from_apks(apk_paths_text: str, output_dir: str, native_lib_dir: str)
         if old.is_file():
             old.unlink()
 
-    _configure_fsb_native_libs(native_lib_dir)
+    logger = ProgressLogger(progress_log_path)
+    apks = None
 
-    apks = ApkSet(apk_paths)
     try:
+        logger.log(f"[准备] APK 数量：{len(apk_paths)}")
+        _configure_fsb_native_libs(native_lib_dir)
+
+        apks = ApkSet(apk_paths)
         if not apks.exists(CATALOG_PATH):
             raise ExtractError(f"Missing {CATALOG_PATH}")
 
+        logger.log("[目录] 正在解析 Addressables catalog")
         rows = parse_catalog(apks.read(CATALOG_PATH))
-        music_rows = [(k, v) for k, v in rows if k.endswith(".0/music.wav")]
+
+        # Catalogs can contain repeated references. Deduplicate by track key so
+        # worker threads never race on the same output filename.
+        seen_keys = set()
+        music_rows: List[Tuple[str, str]] = []
+        for key, value in rows:
+            if not key.endswith(".0/music.wav") or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            music_rows.append((key, value))
+
         if not music_rows:
             raise ExtractError("No Phigros music entries found in Addressables catalog")
 
+        requested_workers = max(1, int(worker_count or 1))
+        workers = min(requested_workers, len(music_rows))
+        logger.log(f"[并发] 发现 {len(music_rows)} 首，启动 {workers} 个解析线程")
+
         extracted = 0
         failures: List[str] = []
+        started = time.monotonic()
 
-        for key, bundle_name in music_rows:
-            song_id = key[:-12]
-            bundle_path = BUNDLE_PREFIX + bundle_name
-            if not apks.exists(bundle_path):
-                failures.append(f"{song_id}: bundle missing: {bundle_path}")
-                continue
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="phigros") as pool:
+            futures = [
+                pool.submit(_extract_one, apks, out, key, bundle_name, logger)
+                for key, bundle_name in music_rows
+            ]
+            completed = 0
+            for future in as_completed(futures):
+                ok, detail = future.result()
+                completed += 1
+                if ok:
+                    extracted += 1
+                else:
+                    failures.append(detail)
+                logger.log(f"[进度] {completed}/{len(music_rows)}，成功 {extracted}，失败 {len(failures)}")
 
-            try:
-                bundle = apks.read(bundle_path)
-                payload = unpack_unityfs(bundle)
-                bank = _find_fsb(payload)
-                if bank is None:
-                    raise ExtractError("FSB5 payload not found")
-
-                sample = bank.samples[0]
-                ext = bank.get_sample_extension()
-                if ext not in ("ogg", "mp3", "wav"):
-                    raise ExtractError(f"Unsupported audio format: {bank.header.mode}")
-
-                rebuilt = bank.rebuild_sample(sample)
-                destination = out / f"{_safe_filename(song_id)}.{ext}"
-                tmp = destination.with_suffix(destination.suffix + ".part")
-                tmp.write_bytes(rebuilt)
-                os.replace(tmp, destination)
-                extracted += 1
-            except Exception as exc:
-                failures.append(f"{song_id}: {exc}")
+        elapsed = time.monotonic() - started
+        logger.log(
+            f"[汇总] 解析结束：成功 {extracted}，失败 {len(failures)}，耗时 {elapsed:.2f}s"
+        )
 
         if extracted == 0:
             detail = "\n".join(failures[:8])
@@ -361,4 +465,6 @@ def extract_from_apks(apk_paths_text: str, output_dir: str, native_lib_dir: str)
 
         return extracted
     finally:
-        apks.close()
+        if apks is not None:
+            apks.close()
+        logger.close()
