@@ -272,7 +272,7 @@ public class MainActivity extends Activity {
                     throw new IllegalStateException("没有找到 Phigros APK。");
                 }
                 appendLog("定位到 " + sourceApks.size() + " 个 APK 文件。");
-                setProgress(3);
+                setTaskProgress(3);
 
                 updatePhase("正在通过 Root 读取 APK……");
                 List<String> localApks = new ArrayList<>();
@@ -284,11 +284,11 @@ public class MainActivity extends Activity {
                     localApks.add(dst.getAbsolutePath());
                     appendLog("APK 已缓存：" + dst.getName() + "，"
                             + formatBytes(dst.length()));
-                    setProgress(3 + Math.round((i + 1) * 7f / sourceApks.size()));
+                    setTaskProgress(3 + Math.round((i + 1) * 7f / sourceApks.size()));
                 }
 
                 updatePhase("正在并发解析 Addressables / UnityFS / FSB5……");
-                setProgress(10);
+                setTaskProgress(10);
                 startPythonLogPolling(pythonLog);
 
                 PyObject result;
@@ -316,7 +316,7 @@ public class MainActivity extends Activity {
 
                 appendLog("解析阶段完成，共生成 " + extracted + " 首音频。");
                 updatePhase("正在写入你选择的目录……");
-                setProgress(86);
+                setTaskProgress(86);
 
                 int copied = copyResultsToTree(outDir, outputTreeUri);
                 if (copied <= 0) {
@@ -433,7 +433,7 @@ public class MainActivity extends Activity {
             copied++;
             appendLog("[输出] " + copied + "/" + files.length + "  " + src.getName()
                     + "  " + formatBytes(src.length()));
-            setProgress(86 + Math.round(copied * 14f / Math.max(1, files.length)));
+            setTaskProgress(86 + Math.round(copied * 14f / Math.max(1, files.length)));
         }
         return copied;
     }
@@ -497,7 +497,7 @@ public class MainActivity extends Activity {
 
         if (done >= 0 && total > 0) {
             int value = 10 + Math.round(done * 75f / total);
-            setProgress(Math.min(85, value));
+            setTaskProgress(Math.min(85, value));
         }
     }
 
@@ -529,7 +529,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void setProgress(int value) {
+    private void setTaskProgress(int value) {
         runOnUiThread(() -> {
             progress.setIndeterminate(false);
             progress.setProgress(Math.max(0, Math.min(100, value)));
