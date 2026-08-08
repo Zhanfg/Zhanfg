@@ -1,6 +1,7 @@
 package cc.axymorrsen.phigrosextractor
 
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -15,7 +16,25 @@ data class TrackMeta(
     val title: String,
     val composer: String,
     val illustrator: String,
-    val remoteId: Int?
+    val songKey: String = "",
+    val songTitle: String = "",
+    val chapter: String = "",
+    val charters: List<String> = emptyList(),
+    val difficulties: List<String> = emptyList(),
+    val levelNames: List<String> = emptyList(),
+    val hasLegacy: Boolean = false,
+    val remoteId: Int? = null
+)
+
+private data class MusicRecord(
+    val id: Int,
+    val title: String,
+    val composer: String,
+    val chapter: String,
+    val illustrator: String,
+    val charters: List<String>,
+    val difficulties: List<String>,
+    val hasLegacy: Boolean
 )
 
 object RemoteCatalog {
@@ -39,6 +58,7 @@ object RemoteCatalog {
         val metadata = JSONArray(metadataFile.readText(Charsets.UTF_8))
         val music = JSONArray(musicFile.readText(Charsets.UTF_8))
 
+        val byId = HashMap<Int, MusicRecord>()
         val byStrongKey = HashMap<String, Int>()
         val byTitle = HashMap<String, MutableList<Pair<Int, String>>>()
 
@@ -46,10 +66,19 @@ object RemoteCatalog {
             val item = music.getJSONObject(i)
             val id = item.optInt("id", -1)
             if (id < 0) continue
-            val title = item.optString("title")
-            val composer = item.optString("composer")
-            byStrongKey[strongKey(title, composer)] = id
-            byTitle.getOrPut(norm(title)) { ArrayList() }.add(id to composer)
+            val record = MusicRecord(
+                id = id,
+                title = item.optString("title"),
+                composer = item.optString("composer"),
+                chapter = item.optString("chapter"),
+                illustrator = item.optString("illustrator"),
+                charters = item.optStringList("charter"),
+                difficulties = item.optStringList("level"),
+                hasLegacy = item.optBoolean("hasLegacy", false)
+            )
+            byId[id] = record
+            byStrongKey[strongKey(record.title, record.composer)] = id
+            byTitle.getOrPut(norm(record.title)) { ArrayList() }.add(id to record.composer)
         }
 
         val result = LinkedHashMap<String, TrackMeta>()
@@ -57,6 +86,7 @@ object RemoteCatalog {
             val item = metadata.getJSONObject(i)
             val songId = item.optString("songId")
             if (songId.isBlank()) continue
+
             val title = item.optString("songName").ifBlank {
                 item.optString("songKey").ifBlank { songId }
             }
@@ -87,18 +117,34 @@ object RemoteCatalog {
                 }
             }
 
+            val musicRecord = remoteId?.let(byId::get)
             val value = TrackMeta(
                 songId = songId,
                 title = title,
-                composer = composer,
-                illustrator = illustrator,
+                composer = composer.ifBlank { musicRecord?.composer.orEmpty() },
+                illustrator = illustrator.ifBlank { musicRecord?.illustrator.orEmpty() },
+                songKey = item.optString("songKey"),
+                songTitle = item.optString("songTitle"),
+                chapter = musicRecord?.chapter.orEmpty(),
+                charters = item.optStringList("charter").ifEmpty {
+                    musicRecord?.charters.orEmpty()
+                },
+                difficulties = item.optStringList("difficulty").ifEmpty {
+                    musicRecord?.difficulties.orEmpty()
+                },
+                levelNames = item.optStringList("levels"),
+                hasLegacy = musicRecord?.hasLegacy ?: false,
                 remoteId = remoteId
             )
             result[songId] = value
             result.putIfAbsent(MainActivity.safeFileName(songId), value)
         }
 
-        log("曲目信息已匹配：${result.values.distinctBy { it.songId }.size} 条；可定位封面 ${result.values.distinctBy { it.songId }.count { it.remoteId != null }} 条。")
+        val unique = result.values.distinctBy { it.songId }
+        log(
+            "曲目信息已匹配：${unique.size} 条；章节 ${unique.count { it.chapter.isNotBlank() }} 条；" +
+                "谱师 ${unique.count { it.charters.isNotEmpty() }} 条；可定位封面 ${unique.count { it.remoteId != null }} 条。"
+        )
         return result
     }
 
@@ -161,6 +207,16 @@ object RemoteCatalog {
             setRequestProperty("Accept", "application/json,image/png,*/*")
             instanceFollowRedirects = true
         }
+
+    private fun JSONObject.optStringList(key: String): List<String> {
+        val array = optJSONArray(key) ?: return emptyList()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val value = array.optString(i).trim()
+                if (value.isNotBlank()) add(value)
+            }
+        }
+    }
 
     private fun strongKey(title: String, composer: String): String =
         norm(title) + "|" + norm(composer)
