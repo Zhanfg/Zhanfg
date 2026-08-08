@@ -67,6 +67,10 @@ chaquopy {
             install './vendor/python-fsb5'
             install 'chaquopy-libogg'
             install 'chaquopy-libvorbis'
+            // Pure-Python tag writer. Covers are embedded after FFmpeg has
+            // finished the audio stream, so FLAC/MP3 conversion never depends
+            // on FFmpeg's image decoder/parser support.
+            install 'mutagen==1.47.0'
         }
     }
 }
