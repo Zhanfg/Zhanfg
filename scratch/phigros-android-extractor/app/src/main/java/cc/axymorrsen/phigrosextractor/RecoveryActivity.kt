@@ -36,6 +36,10 @@ import java.io.FileOutputStream
 import java.util.Properties
 import java.util.concurrent.Executors
 
+private const val COVER_MIGRATION_PREFS = "cover_migration"
+private const val COVER_MIGRATION_KEY = "cover_pipeline_v2"
+private const val EXPORT_INDEX_FILE = "phigros_export_index_v1.json"
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 class RecoveryActivity : ComponentActivity() {
     private val executor = Executors.newSingleThreadExecutor()
@@ -56,6 +60,8 @@ class RecoveryActivity : ComponentActivity() {
 
     private fun recoverThenLaunch() {
         try {
+            invalidateLegacyNoCoverExportsOnce()
+
             val version = runCatching {
                 packageManager.getPackageInfo("com.PigeonGames.Phigros", 0).versionName.orEmpty()
             }.getOrDefault("")
@@ -77,7 +83,10 @@ class RecoveryActivity : ComponentActivity() {
                 val storedVersion = props.getProperty("phigros_version", "")
                 val storedCount = props.getProperty("ogg_count", "0").toIntOrNull() ?: 0
                 if (storedVersion == version && storedCount == existing.size) {
-                    update("已有 OGG 断点", "${existing.size} 首可直接继续转码，无需重新解包。")
+                    update(
+                        "已有 OGG 断点",
+                        "${existing.size} 首可直接继续转码；旧版无封面输出会在本轮强制重写，不重新解包。"
+                    )
                     launchMain()
                     return
                 }
@@ -102,7 +111,7 @@ class RecoveryActivity : ComponentActivity() {
                 }
                 update(
                     "OGG 接管完成",
-                    "$copied 首已转入持久断点；先直接继续转码，完成后再建立未来版本的增量 bundle 基线。"
+                    "$copied 首已转入持久断点；本轮直接重写 FLAC/MP3 封面与标签，不重新解包。"
                 )
             } else {
                 update("未发现可接管的旧 OGG", "主界面将按增量/正常流程处理。")
@@ -112,6 +121,24 @@ class RecoveryActivity : ComponentActivity() {
             update("断点接管失败", t.message ?: t.javaClass.simpleName)
             launchMain()
         }
+    }
+
+    /**
+     * Earlier builds could record a successful export index after falling back
+     * to an audio-only file when cover embedding failed. That makes newer builds
+     * incorrectly skip those files as unchanged. Invalidate only the export
+     * index once; the persistent OGG checkpoint remains untouched.
+     */
+    private fun invalidateLegacyNoCoverExportsOnce() {
+        val prefs = getSharedPreferences(COVER_MIGRATION_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(COVER_MIGRATION_KEY, false)) return
+
+        val index = File(filesDir, EXPORT_INDEX_FILE)
+        if (index.exists() && !index.delete()) {
+            throw IllegalStateException("无法清除旧版无封面导出索引")
+        }
+        prefs.edit().putBoolean(COVER_MIGRATION_KEY, true).apply()
+        update("正在迁移封面管线…", "OGG 断点保留；旧 FLAC/MP3 将只重做封面与标签阶段。")
     }
 
     private fun update(title: String, text: String) = runOnUiThread {
