@@ -1,5 +1,7 @@
 package cc.axymorrsen.phigrosextractor
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -150,7 +152,8 @@ object RemoteCatalog {
 
     fun downloadCover(remoteId: Int, destination: File) {
         destination.parentFile?.mkdirs()
-        val temp = File(destination.parentFile, destination.name + ".part")
+        val downloaded = File(destination.parentFile, destination.name + ".download")
+        val normalized = File(destination.parentFile, destination.name + ".normalized")
         val url = "$RAW_BASE/music/$remoteId/cover.png"
         val conn = open(url)
         try {
@@ -158,21 +161,55 @@ object RemoteCatalog {
                 throw IllegalStateException("HTTP ${conn.responseCode}：cover $remoteId")
             }
             BufferedInputStream(conn.inputStream).use { input ->
-                BufferedOutputStream(FileOutputStream(temp)).use { output ->
+                BufferedOutputStream(FileOutputStream(downloaded)).use { output ->
                     MainActivity.copyStream(input, output)
                 }
             }
-            if (temp.length() < 1024L) {
-                throw IllegalStateException("封面文件异常小：${temp.length()} B")
+            if (downloaded.length() < 1024L) {
+                throw IllegalStateException("封面文件异常小：${downloaded.length()} B")
             }
+
+            // Do not trust the extension or HTTP body alone. Decode the image
+            // with Android first so truncated/odd PNG streams never reach
+            // FFmpeg. Then re-encode losslessly as a canonical static PNG.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(downloaded.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                throw IllegalStateException(
+                    "封面无法解析尺寸：${downloaded.length()} B，${bounds.outMimeType ?: "unknown mime"}"
+                )
+            }
+
+            val bitmap = BitmapFactory.decodeFile(downloaded.absolutePath)
+                ?: throw IllegalStateException(
+                    "封面解码失败：${bounds.outWidth}x${bounds.outHeight}，${bounds.outMimeType ?: "unknown mime"}"
+                )
+            try {
+                FileOutputStream(normalized).use { output ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw IllegalStateException("封面标准化 PNG 写入失败")
+                    }
+                    output.fd.sync()
+                }
+            } finally {
+                bitmap.recycle()
+            }
+
+            val check = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(normalized.absolutePath, check)
+            if (check.outWidth <= 0 || check.outHeight <= 0 || normalized.length() < 128L) {
+                throw IllegalStateException("标准化后的封面仍不可解析")
+            }
+
             if (destination.exists()) destination.delete()
-            if (!temp.renameTo(destination)) {
-                temp.copyTo(destination, overwrite = true)
-                temp.delete()
+            if (!normalized.renameTo(destination)) {
+                normalized.copyTo(destination, overwrite = true)
+                normalized.delete()
             }
         } finally {
             conn.disconnect()
-            if (temp.exists()) temp.delete()
+            if (downloaded.exists()) downloaded.delete()
+            if (normalized.exists()) normalized.delete()
         }
     }
 
