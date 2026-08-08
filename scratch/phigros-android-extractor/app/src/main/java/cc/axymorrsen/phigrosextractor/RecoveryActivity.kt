@@ -4,8 +4,8 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -60,7 +60,7 @@ class RecoveryActivity : ComponentActivity() {
                 packageManager.getPackageInfo("com.PigeonGames.Phigros", 0).versionName.orEmpty()
             }.getOrDefault("")
             if (version.isBlank()) {
-                update("未检测到 Phigros", "将进入主界面，由主流程继续检查。")
+                update("未检测到 Phigros", "将进入主界面，由增量流程继续检查。")
                 launchMain()
                 return
             }
@@ -100,9 +100,12 @@ class RecoveryActivity : ComponentActivity() {
                 FileOutputStream(meta).use {
                     props.store(it, "Recovered Phigros OGG checkpoint")
                 }
-                update("OGG 接管完成", "$copied 首已转入持久断点，接下来直接从元数据/封面/转码阶段继续。")
+                update(
+                    "OGG 接管完成",
+                    "$copied 首已转入持久断点；先直接继续转码，完成后再建立未来版本的增量 bundle 基线。"
+                )
             } else {
-                update("未发现可接管的旧 OGG", "如果旧版没有完整解析记录，主界面将按正常流程处理。")
+                update("未发现可接管的旧 OGG", "主界面将按增量/正常流程处理。")
             }
             launchMain()
         } catch (t: Throwable) {
@@ -118,7 +121,7 @@ class RecoveryActivity : ComponentActivity() {
 
     private fun launchMain() {
         runOnUiThread {
-            startActivity(Intent(this, MainActivity::class.java))
+            startActivity(Intent(this, IncrementalMainActivity::class.java))
             finish()
         }
     }
