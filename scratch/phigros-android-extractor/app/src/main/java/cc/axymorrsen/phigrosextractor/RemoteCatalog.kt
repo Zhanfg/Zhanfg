@@ -12,6 +12,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.roundToInt
 
 data class TrackMeta(
     val songId: String,
@@ -44,6 +45,7 @@ object RemoteCatalog {
         "https://raw.githubusercontent.com/SonolusHaniwa/phigros-decrypted-data/main"
     private const val METADATA_URL = "$RAW_BASE/metadata.json"
     private const val MUSIC_URL = "$RAW_BASE/music.json"
+    private const val EMBEDDED_COVER_MAX_EDGE = 1600
 
     fun load(
         context: android.content.Context,
@@ -169,9 +171,6 @@ object RemoteCatalog {
                 throw IllegalStateException("封面文件异常小：${downloaded.length()} B")
             }
 
-            // Do not trust the extension or HTTP body alone. Decode the image
-            // with Android first so truncated/odd PNG streams never reach
-            // FFmpeg. Then re-encode losslessly as a canonical static PNG.
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(downloaded.absolutePath, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -180,25 +179,41 @@ object RemoteCatalog {
                 )
             }
 
-            val bitmap = BitmapFactory.decodeFile(downloaded.absolutePath)
+            val source = BitmapFactory.decodeFile(downloaded.absolutePath)
                 ?: throw IllegalStateException(
                     "封面解码失败：${bounds.outWidth}x${bounds.outHeight}，${bounds.outMimeType ?: "unknown mime"}"
                 )
+
+            val maxEdge = maxOf(source.width, source.height)
+            val target = if (maxEdge > EMBEDDED_COVER_MAX_EDGE) {
+                val scale = EMBEDDED_COVER_MAX_EDGE.toFloat() / maxEdge.toFloat()
+                Bitmap.createScaledBitmap(
+                    source,
+                    (source.width * scale).roundToInt().coerceAtLeast(1),
+                    (source.height * scale).roundToInt().coerceAtLeast(1),
+                    true
+                )
+            } else source
+
             try {
                 FileOutputStream(normalized).use { output ->
-                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
-                        throw IllegalStateException("封面标准化 PNG 写入失败")
+                    // JPEG is intentionally used for embedded album art. It is
+                    // substantially smaller than the source PNG and has better
+                    // compatibility with Android media scanners and music apps.
+                    if (!target.compress(Bitmap.CompressFormat.JPEG, 94, output)) {
+                        throw IllegalStateException("封面标准化 JPEG 写入失败")
                     }
                     output.fd.sync()
                 }
             } finally {
-                bitmap.recycle()
+                if (target !== source) target.recycle()
+                source.recycle()
             }
 
             val check = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(normalized.absolutePath, check)
             if (check.outWidth <= 0 || check.outHeight <= 0 || normalized.length() < 128L) {
-                throw IllegalStateException("标准化后的封面仍不可解析")
+                throw IllegalStateException("标准化后的 JPEG 封面仍不可解析")
             }
 
             if (destination.exists()) destination.delete()
@@ -237,11 +252,11 @@ object RemoteCatalog {
 
     private fun open(url: String): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12_000
-            readTimeout = 25_000
+            connectTimeout = 8_000
+            readTimeout = 15_000
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "PhigrosMusicExtractor/0.2")
-            setRequestProperty("Accept", "application/json,image/png,*/*")
+            setRequestProperty("User-Agent", "PhigrosMusicExtractor/0.3")
+            setRequestProperty("Accept", "application/json,image/png,image/jpeg,*/*")
             instanceFollowRedirects = true
         }
 
