@@ -6,8 +6,11 @@ import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -28,37 +31,58 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private static final String PHIGROS_PACKAGE = "com.PigeonGames.Phigros";
     private static final int REQ_PICK_DIR = 1001;
     private static final String PREFS = "prefs";
     private static final String KEY_TREE_URI = "tree_uri";
+    private static final int MAX_LOG_CHARS = 60000;
+    private static final Pattern PY_PROGRESS_PATTERN =
+            Pattern.compile("\\[进度\\]\\s+(\\d+)/(\\d+)");
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService logWatcher = Executors.newSingleThreadScheduledExecutor();
 
     private TextView status;
     private TextView outputPath;
+    private TextView logView;
+    private ScrollView logScroll;
     private ProgressBar progress;
     private Button extractButton;
     private Uri outputTreeUri;
+
+    private ScheduledFuture<?> logFuture;
+    private String lastPythonLogText = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUi();
         restoreOutputDirectory();
+        appendLog("应用已启动，正在检查运行环境。");
         refreshStatus();
     }
 
     @Override
     protected void onDestroy() {
+        stopPythonLogPolling();
         worker.shutdownNow();
+        logWatcher.shutdownNow();
         super.onDestroy();
     }
 
@@ -109,9 +133,36 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(root);
-        setContentView(scroll);
+        TextView logTitle = new TextView(this);
+        logTitle.setText("运行日志 / 解析反馈");
+        logTitle.setTextSize(15f);
+        logTitle.setPadding(0, dp(8), 0, dp(6));
+        root.addView(logTitle);
+
+        logView = new TextView(this);
+        logView.setTextSize(12f);
+        logView.setTextColor(Color.rgb(235, 235, 235));
+        logView.setBackgroundColor(Color.rgb(24, 24, 24));
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+        logView.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+        logScroll = new ScrollView(this);
+        logScroll.setFillViewport(true);
+        logScroll.addView(logView, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+        ));
+        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(300)
+        );
+        root.addView(logScroll, logParams);
+
+        ScrollView page = new ScrollView(this);
+        page.setFillViewport(true);
+        page.addView(root);
+        setContentView(page);
     }
 
     private void refreshStatus() {
@@ -131,8 +182,13 @@ public class MainActivity extends Activity {
                 ApplicationInfo ai = getPackageManager().getApplicationInfo(PHIGROS_PACKAGE, 0);
                 int splitCount = ai.splitSourceDirs == null ? 0 : ai.splitSourceDirs.length;
                 sb.append("APK: base + ").append(splitCount).append(" split");
+
+                appendLog("环境检查：Root=" + (rootOk ? "可用" : "不可用")
+                        + "，Phigros=" + (pi.versionName == null ? "已安装" : pi.versionName)
+                        + "，split=" + splitCount);
             } catch (PackageManager.NameNotFoundException e) {
                 sb.append("Phigros: 未安装");
+                appendLog("环境检查：未检测到 Phigros。");
             }
 
             runOnUiThread(() -> status.setText(sb.toString()));
@@ -165,6 +221,7 @@ public class MainActivity extends Activity {
         outputTreeUri = uri;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_TREE_URI, uri.toString()).apply();
         outputPath.setText("输出目录：" + uri);
+        appendLog("输出目录已设置：" + uri);
     }
 
     private void restoreOutputDirectory() {
@@ -181,18 +238,26 @@ public class MainActivity extends Activity {
     private void startExtraction() {
         if (outputTreeUri == null) {
             setStatus("请先选择输出目录。", false);
+            appendLog("任务未开始：尚未选择输出目录。");
             return;
         }
 
+        clearLog();
         extractButton.setEnabled(false);
-        progress.setIndeterminate(true);
-        setStatus("正在准备……", true);
+        progress.setIndeterminate(false);
+        progress.setProgress(0);
+        status.setText("正在准备……");
+
+        int workerCount = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
+        appendLog("开始提取任务。");
+        appendLog("解析线程数：" + workerCount + "（按设备 CPU 自动限制为最多 4 线程）。");
 
         worker.execute(() -> {
             File workRoot = new File(getCacheDir(), "phigros_extract");
             deleteRecursively(workRoot);
             File apkDir = new File(workRoot, "apks");
             File outDir = new File(workRoot, "out");
+            File pythonLog = new File(workRoot, "extract-progress.log");
             apkDir.mkdirs();
             outDir.mkdirs();
 
@@ -206,38 +271,60 @@ public class MainActivity extends Activity {
                 if (sourceApks.isEmpty()) {
                     throw new IllegalStateException("没有找到 Phigros APK。");
                 }
+                appendLog("定位到 " + sourceApks.size() + " 个 APK 文件。");
+                setProgress(3);
 
                 updatePhase("正在通过 Root 读取 APK……");
                 List<String> localApks = new ArrayList<>();
                 for (int i = 0; i < sourceApks.size(); i++) {
-                    File dst = new File(apkDir, String.format("%02d.apk", i));
-                    copyProtectedFile(sourceApks.get(i), dst);
+                    String source = sourceApks.get(i);
+                    File dst = new File(apkDir, String.format(Locale.US, "%02d.apk", i));
+                    appendLog("读取 APK " + (i + 1) + "/" + sourceApks.size() + "：" + source);
+                    copyProtectedFile(source, dst);
                     localApks.add(dst.getAbsolutePath());
+                    appendLog("APK 已缓存：" + dst.getName() + "，"
+                            + formatBytes(dst.length()));
+                    setProgress(3 + Math.round((i + 1) * 7f / sourceApks.size()));
                 }
 
-                updatePhase("正在解析 Addressables / UnityFS / FSB5……");
-                Python py = Python.getInstance();
-                PyObject module = py.getModule("extractor");
-                String joined = String.join("\n", localApks);
-                PyObject result = module.callAttr(
-                        "extract_from_apks",
-                        joined,
-                        outDir.getAbsolutePath(),
-                        getApplicationInfo().nativeLibraryDir
-                );
-                int extracted = result.toInt();
+                updatePhase("正在并发解析 Addressables / UnityFS / FSB5……");
+                setProgress(10);
+                startPythonLogPolling(pythonLog);
 
+                PyObject result;
+                try {
+                    Python py = Python.getInstance();
+                    PyObject module = py.getModule("extractor");
+                    String joined = String.join("\n", localApks);
+                    result = module.callAttr(
+                            "extract_from_apks",
+                            joined,
+                            outDir.getAbsolutePath(),
+                            getApplicationInfo().nativeLibraryDir,
+                            pythonLog.getAbsolutePath(),
+                            workerCount
+                    );
+                } finally {
+                    drainPythonLog(pythonLog);
+                    stopPythonLogPolling();
+                }
+
+                int extracted = result.toInt();
                 if (extracted <= 0) {
                     throw new IllegalStateException("解析完成，但没有提取到音乐。游戏资源结构可能已经变化。");
                 }
 
+                appendLog("解析阶段完成，共生成 " + extracted + " 首音频。");
                 updatePhase("正在写入你选择的目录……");
+                setProgress(86);
+
                 int copied = copyResultsToTree(outDir, outputTreeUri);
                 if (copied <= 0) {
                     throw new IllegalStateException("音乐已解析，但写入输出目录失败。");
                 }
 
                 int finalCopied = copied;
+                appendLog("全部完成：成功写入 " + finalCopied + " 首音乐。");
                 runOnUiThread(() -> {
                     progress.setIndeterminate(false);
                     progress.setProgress(100);
@@ -245,11 +332,14 @@ public class MainActivity extends Activity {
                     status.setText("完成：已写入 " + finalCopied + " 首音乐。\n输出目录：" + outputTreeUri);
                 });
             } catch (Throwable t) {
+                stopPythonLogPolling();
+                String message = readableMessage(t);
+                appendLog("任务失败：" + message);
                 runOnUiThread(() -> {
                     progress.setIndeterminate(false);
                     progress.setProgress(0);
                     extractButton.setEnabled(true);
-                    status.setText("失败：" + readableMessage(t));
+                    status.setText("失败：" + message);
                 });
             } finally {
                 deleteRecursively(apkDir);
@@ -341,20 +431,131 @@ public class MainActivity extends Activity {
                 copyStream(in, out);
             }
             copied++;
+            appendLog("[输出] " + copied + "/" + files.length + "  " + src.getName()
+                    + "  " + formatBytes(src.length()));
+            setProgress(86 + Math.round(copied * 14f / Math.max(1, files.length)));
         }
         return copied;
     }
 
+    private void startPythonLogPolling(File logFile) {
+        stopPythonLogPolling();
+        lastPythonLogText = "";
+        logFuture = logWatcher.scheduleAtFixedRate(
+                () -> drainPythonLog(logFile),
+                0,
+                250,
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    private void stopPythonLogPolling() {
+        ScheduledFuture<?> future = logFuture;
+        if (future != null) {
+            future.cancel(false);
+            logFuture = null;
+        }
+    }
+
+    private void drainPythonLog(File logFile) {
+        if (logFile == null || !logFile.isFile()) {
+            return;
+        }
+
+        try {
+            String current = new String(Files.readAllBytes(logFile.toPath()), StandardCharsets.UTF_8);
+            String delta;
+            synchronized (this) {
+                if (current.equals(lastPythonLogText)) {
+                    return;
+                }
+                if (current.startsWith(lastPythonLogText)) {
+                    delta = current.substring(lastPythonLogText.length());
+                } else {
+                    delta = current;
+                }
+                lastPythonLogText = current;
+            }
+
+            if (!delta.isEmpty()) {
+                appendRawLog(delta);
+                updateProgressFromPythonLog(delta);
+            }
+        } catch (Throwable ignored) {
+            // Logging must never abort extraction.
+        }
+    }
+
+    private void updateProgressFromPythonLog(String text) {
+        Matcher matcher = PY_PROGRESS_PATTERN.matcher(text);
+        int done = -1;
+        int total = -1;
+        while (matcher.find()) {
+            done = Integer.parseInt(matcher.group(1));
+            total = Integer.parseInt(matcher.group(2));
+        }
+
+        if (done >= 0 && total > 0) {
+            int value = 10 + Math.round(done * 75f / total);
+            setProgress(Math.min(85, value));
+        }
+    }
+
+    private void clearLog() {
+        runOnUiThread(() -> logView.setText(""));
+        synchronized (this) {
+            lastPythonLogText = "";
+        }
+    }
+
+    private void appendLog(String message) {
+        String timestamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        appendRawLog(timestamp + " " + message + "\n");
+    }
+
+    private void appendRawLog(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+
+        runOnUiThread(() -> {
+            String merged = logView.getText().toString() + text;
+            if (merged.length() > MAX_LOG_CHARS) {
+                merged = "……较早日志已截断……\n"
+                        + merged.substring(merged.length() - MAX_LOG_CHARS);
+            }
+            logView.setText(merged);
+            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+        });
+    }
+
+    private void setProgress(int value) {
+        runOnUiThread(() -> {
+            progress.setIndeterminate(false);
+            progress.setProgress(Math.max(0, Math.min(100, value)));
+        });
+    }
+
     private static boolean isAudioFile(String name) {
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".ogg") || lower.endsWith(".mp3") || lower.endsWith(".wav");
     }
 
     private static String mimeFor(String name) {
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".mp3")) return "audio/mpeg";
         if (lower.endsWith(".wav")) return "audio/wav";
         return "audio/ogg";
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format(Locale.US, "%.2f MiB", bytes / (1024.0 * 1024.0));
+        }
+        if (bytes >= 1024L) {
+            return String.format(Locale.US, "%.1f KiB", bytes / 1024.0);
+        }
+        return bytes + " B";
     }
 
     private static <T> T requireNonNull(T value, String message) {
@@ -385,6 +586,7 @@ public class MainActivity extends Activity {
     }
 
     private void updatePhase(String text) {
+        appendLog(text);
         runOnUiThread(() -> status.setText(text));
     }
 
