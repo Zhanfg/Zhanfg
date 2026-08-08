@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -37,7 +37,7 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
 
-      - name: Install stable Android 16 SDK
+      - name: Install Android 16 SDK
         shell: bash
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
@@ -45,6 +45,53 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
+
+      - name: Restore FFmpegKitNext arm64 cache
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: scratch/phigros-android-extractor/local-maven
+          key: ffmpeg-kit-next-8.1.1-api26-arm64-lame-v2
+
+      - name: Install Nix
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build FFmpegKitNext arm64 audio bundle
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$RUNNER_TEMP/ffmpeg-kit-next"
+          git clone --depth 1 --branch v8.1.1 \
+            https://github.com/arthenica/ffmpeg-kit-next.git \
+            "$RUNNER_TEMP/ffmpeg-kit-next"
+
+          cd "$RUNNER_TEMP/ffmpeg-kit-next"
+          ./nix-android.sh -p android-r27d \
+            --api-level=26 \
+            --enable-lame \
+            --disable-arm-v7a \
+            --disable-arm-v7a-neon \
+            --disable-x86 \
+            --disable-x86-64 \
+            --jobs=2
+
+          MAVEN_ROOT="$(find prebuilt -maxdepth 1 -type d -name 'bundle-android-aar-*-maven' | head -n 1)"
+          test -n "$MAVEN_ROOT"
+          test -f "$(find "$MAVEN_ROOT" -type f -name 'ffmpeg-kit-next-8.1.1.aar' | head -n 1)"
+
+          rm -rf "$GITHUB_WORKSPACE/scratch/phigros-android-extractor/local-maven"
+          mkdir -p "$GITHUB_WORKSPACE/scratch/phigros-android-extractor/local-maven"
+          cp -a "$MAVEN_ROOT/." "$GITHUB_WORKSPACE/scratch/phigros-android-extractor/local-maven/"
+
+      - name: Validate FFmpegKitNext local repository
+        shell: bash
+        run: |
+          test -f "$(find scratch/phigros-android-extractor/local-maven -type f -name 'ffmpeg-kit-next-8.1.1.aar' | head -n 1)"
+          du -sh scratch/phigros-android-extractor/local-maven
 
       - name: Vendor python-fsb5
         shell: bash
@@ -61,7 +108,9 @@ jobs:
         shell: bash
         run: |
           test -f scratch/phigros-android-extractor/app/build.gradle
-          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.java
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.kt
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/RemoteCatalog.kt
+          test -f scratch/phigros-android-extractor/app/src/main/java/cc/axymorrsen/phigrosextractor/AudioProcessor.kt
           test -f scratch/phigros-android-extractor/app/src/main/python/extractor.py
           python -m py_compile scratch/phigros-android-extractor/app/src/main/python/extractor.py
 
@@ -69,10 +118,18 @@ jobs:
         working-directory: scratch/phigros-android-extractor
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
+      - name: Inspect APK native payload
+        shell: bash
+        run: |
+          APK=scratch/phigros-android-extractor/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -n 50
+          sha256sum "$APK"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: phigros-music-extractor-debug
+          name: phigros-music-extractor-m3e-debug
           path: scratch/phigros-android-extractor/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
