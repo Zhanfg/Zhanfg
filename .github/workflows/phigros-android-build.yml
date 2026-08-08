@@ -37,9 +37,9 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
 
-      - name: Install Android 16 SDK
+      - name: Install Android 17 compile SDK
         shell: bash
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0'
 
       - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v4
@@ -93,6 +93,13 @@ jobs:
           test -f "$(find scratch/phigros-android-extractor/local-maven -type f -name 'ffmpeg-kit-next-8.1.1.aar' | head -n 1)"
           du -sh scratch/phigros-android-extractor/local-maven
 
+      - name: Persist FFmpegKitNext cache immediately
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: scratch/phigros-android-extractor/local-maven
+          key: ffmpeg-kit-next-8.1.1-api26-arm64-lame-v2
+
       - name: Vendor python-fsb5
         shell: bash
         run: |
@@ -123,7 +130,8 @@ jobs:
         run: |
           APK=scratch/phigros-android-extractor/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
-          unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -n 50
+          unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -n 80
+          unzip -l "$APK" | grep -E 'libmp3lame|libavcodec|libavformat|libavutil|libffmpegkit' || true
           sha256sum "$APK"
 
       - name: Upload APK
