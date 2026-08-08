@@ -37,10 +37,10 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
 
-      - name: Install Android SDK 37
+      - name: Install stable Android 16 SDK
         shell: bash
         run: |
-          sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v4
@@ -55,6 +55,8 @@ jobs:
           base64 -d scratch/phigros-android-extractor/source.zip.b64 > .ci-build/source.zip
           unzip -q .ci-build/source.zip -d .ci-build
           rm .ci-build/source.zip
+          sed -i 's/compileSdk 37/compileSdk 36/' .ci-build/app/build.gradle
+          sed -i 's/targetSdk 37/targetSdk 36/' .ci-build/app/build.gradle
           test -f .ci-build/app/build.gradle
           test -f .ci-build/app/src/main/java/cc/axymorrsen/phigrosextractor/MainActivity.java
           test -f .ci-build/app/src/main/python/extractor.py
