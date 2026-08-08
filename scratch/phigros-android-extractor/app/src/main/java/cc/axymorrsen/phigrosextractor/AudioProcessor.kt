@@ -1,10 +1,15 @@
 package cc.axymorrsen.phigrosextractor
 
 import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.FFmpegSession
 import com.arthenica.ffmpegkit.FFprobeKit
 import com.arthenica.ffmpegkit.ReturnCode
+import com.chaquo.python.Python
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 data class SourceAudioInfo(
     val codecName: String,
@@ -30,6 +35,15 @@ data class SourceAudioInfo(
 }
 
 object AudioProcessor {
+    private const val FFMPEG_TIMEOUT_SECONDS = 90L
+    private const val CANCEL_GRACE_SECONDS = 5L
+
+    /**
+     * FFmpegKit/FFprobe share native process state. The UnityFS/FSB5 extractor
+     * remains multi-threaded, but media conversion is deliberately serialized
+     * so two native sessions never block each other on the same Android process.
+     */
+    @Synchronized
     fun probe(input: File): SourceAudioInfo {
         val session = FFprobeKit.executeWithArguments(
             arrayOf(
@@ -91,6 +105,7 @@ object AudioProcessor {
         return result
     }
 
+    @Synchronized
     fun convert(
         inputOgg: File,
         outputFile: File,
@@ -127,18 +142,8 @@ object AudioProcessor {
         args += "-y"
         args += "-i"
         args += inputOgg.absolutePath
-
-        if (coverFile != null && coverFile.isFile) {
-            args += "-i"
-            args += coverFile.absolutePath
-        }
-
         args += "-map"
         args += "0:a:0"
-        if (coverFile != null && coverFile.isFile) {
-            args += "-map"
-            args += "1:v:0"
-        }
 
         when (format) {
             OutputFormat.MP3 -> {
@@ -153,16 +158,6 @@ object AudioProcessor {
                 if (source.channels > 0) {
                     args += "-ac"
                     args += source.channels.toString()
-                }
-                if (coverFile != null && coverFile.isFile) {
-                    args += "-c:v"
-                    args += "mjpeg"
-                    args += "-disposition:v:0"
-                    args += "attached_pic"
-                    args += "-metadata:s:v"
-                    args += "title=Album cover"
-                    args += "-metadata:s:v"
-                    args += "comment=Cover (front)"
                 }
                 args += "-id3v2_version"
                 args += "3"
@@ -188,16 +183,6 @@ object AudioProcessor {
                     // 24-bit FLAC while preserving the original sample rate.
                     args += "-sample_fmt"
                     args += "s32"
-                }
-                if (coverFile != null && coverFile.isFile) {
-                    args += "-c:v"
-                    args += "copy"
-                    args += "-disposition:v:0"
-                    args += "attached_pic"
-                    args += "-metadata:s:v"
-                    args += "title=Album cover"
-                    args += "-metadata:s:v"
-                    args += "comment=Cover (front)"
                 }
             }
         }
@@ -250,7 +235,7 @@ object AudioProcessor {
 
         args += temp.absolutePath
 
-        val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+        val session = executeFfmpegWithTimeout(args.toTypedArray(), outputFile.name)
         val rc = session.getReturnCode()
         if (!ReturnCode.isSuccess(rc)) {
             val output = session.getOutput().takeLast(4000)
@@ -263,6 +248,29 @@ object AudioProcessor {
         if (!temp.isFile || temp.length() <= 0L) {
             temp.delete()
             throw IllegalStateException("FFmpeg 返回成功，但没有生成有效输出：${outputFile.name}")
+        }
+
+        // Album art is intentionally written AFTER FFmpeg. This removes PNG/
+        // MJPEG parsing from the FLAC/MP3 muxing path, which prevents a broken
+        // or unsupported image stream from making the whole audio conversion
+        // fail with `dimensions not set` / `Could not write header`.
+        if (coverFile != null && coverFile.isFile) {
+            try {
+                Python.getInstance()
+                    .getModule("tagger")
+                    .callAttr(
+                        "embed_cover",
+                        temp.absolutePath,
+                        coverFile.absolutePath,
+                        format.name
+                    )
+            } catch (t: Throwable) {
+                temp.delete()
+                throw IllegalStateException(
+                    "封面标签写入失败：${t.message ?: t.javaClass.simpleName}",
+                    t
+                )
+            }
         }
 
         val exported = probe(temp)
@@ -305,6 +313,31 @@ object AudioProcessor {
             temp.copyTo(outputFile, overwrite = true)
             temp.delete()
         }
+    }
+
+    private fun executeFfmpegWithTimeout(arguments: Array<String>, outputName: String): FFmpegSession {
+        val finished = CountDownLatch(1)
+        val completed = AtomicReference<FFmpegSession?>(null)
+        val session = FFmpegKit.executeWithArgumentsAsync(arguments) { done ->
+            completed.set(done)
+            finished.countDown()
+        }
+
+        if (!finished.await(FFMPEG_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            FFmpegKit.cancel(session.getSessionId())
+            if (!finished.await(CANCEL_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                // Last-resort cancellation: don't allow one wedged native
+                // session to keep the whole batch blocked forever.
+                FFmpegKit.cancel()
+                finished.await(2, TimeUnit.SECONDS)
+            }
+            throw IllegalStateException(
+                "FFmpeg 超过 ${FFMPEG_TIMEOUT_SECONDS}s 无响应，已取消：$outputName。" +
+                    "OGG 断点仍保留，可直接重试。"
+            )
+        }
+
+        return completed.get() ?: session
     }
 
     private fun addMetadata(args: MutableList<String>, key: String, value: String) {
