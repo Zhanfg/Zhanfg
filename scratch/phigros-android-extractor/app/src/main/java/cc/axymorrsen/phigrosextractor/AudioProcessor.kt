@@ -44,11 +44,11 @@ object AudioProcessor {
         val rc = session.getReturnCode()
         if (!ReturnCode.isSuccess(rc)) {
             throw IllegalStateException(
-                "无法读取原始音频参数：${session.getOutput()?.takeLast(2000).orEmpty()}"
+                "无法读取原始音频参数：${session.getOutput().takeLast(2000)}"
             )
         }
 
-        val root = JSONObject(session.getOutput().orEmpty())
+        val root = JSONObject(session.getOutput())
         val streams = root.optJSONArray("streams")
         if (streams == null || streams.length() == 0) {
             throw IllegalStateException("原始文件没有可识别的音频流：${input.name}")
@@ -175,8 +175,7 @@ object AudioProcessor {
             }
         }
 
-        // Preserve every tag that may already be present on the source stream,
-        // then override/add the authoritative Phigros fields below.
+        // Preserve any source tags first, then add authoritative Phigros fields.
         args += "-map_metadata"
         args += "0"
 
@@ -187,13 +186,13 @@ object AudioProcessor {
         }
         if (meta.chapter.isNotBlank()) {
             // Phigros exposes chapter rather than a conventional album field.
-            // Mirroring chapter into ALBUM makes ordinary music libraries group
-            // tracks usefully while GROUPING retains the original semantics.
+            // ALBUM is a compatibility projection for ordinary music players;
+            // CHAPTER and GROUPING retain the original game semantics as well.
             addMetadata(args, "album", meta.chapter)
             addMetadata(args, "grouping", meta.chapter)
             addMetadata(args, "chapter", meta.chapter)
         }
-        meta.remoteId?.let { addMetadata(args, "track", it.toString()) }
+        meta.remoteId?.let { addMetadata(args, "source_catalog_id", it.toString()) }
         addMetadata(args, "source_game", "Phigros")
         addMetadata(args, "source_song_id", meta.songId)
         addMetadata(args, "source_codec", source.codecName)
@@ -227,7 +226,7 @@ object AudioProcessor {
         val session = FFmpegKit.executeWithArguments(args.toTypedArray())
         val rc = session.getReturnCode()
         if (!ReturnCode.isSuccess(rc)) {
-            val output = session.getOutput()?.takeLast(4000).orEmpty()
+            val output = session.getOutput().takeLast(4000)
             temp.delete()
             throw IllegalStateException(
                 "FFmpeg 转码失败 (${format.displayName}, ${source.describe()}, rc=$rc)" +
