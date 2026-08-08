@@ -69,6 +69,7 @@ import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.Properties
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -84,6 +85,9 @@ private const val KEY_FORMAT = "output_format"
 private const val KEY_KEEP_OGG = "keep_ogg"
 private const val KEY_COVER = "cover"
 private const val MAX_LOG_LINES = 700
+private const val CHECKPOINT_DIR = "phigros_ogg_checkpoint_v1"
+private const val CHECKPOINT_META = "checkpoint.properties"
+private const val LEGACY_WORK_DIR = "phigros_extract_v4"
 
 enum class OutputFormat(val displayName: String, val extension: String, val mime: String) {
     FLAC("FLAC", "flac", "audio/flac"),
@@ -95,6 +99,7 @@ data class AppUiState(
     val phigrosInstalled: Boolean = false,
     val phigrosVersion: String = "",
     val splitCount: Int = 0,
+    val cachedOggCount: Int = 0,
     val outputUri: Uri? = null,
     val outputFormat: OutputFormat = OutputFormat.FLAC,
     val keepOgg: Boolean = false,
@@ -196,22 +201,33 @@ class MainActivity : ComponentActivity() {
             try {
                 val pi = packageManager.getPackageInfo(PHIGROS_PACKAGE, 0)
                 val ai = packageManager.getApplicationInfo(PHIGROS_PACKAGE, 0)
+                val version = pi.versionName.orEmpty()
                 val splits = ai.splitSourceDirs?.size ?: 0
+                val cached = inspectReusableOggCount(version)
                 onUi {
                     uiState = uiState.copy(
                         rootOk = rootOk,
                         phigrosInstalled = true,
-                        phigrosVersion = pi.versionName.orEmpty(),
+                        phigrosVersion = version,
                         splitCount = splits,
-                        status = if (rootOk) "已就绪" else "需要 Root 授权"
+                        cachedOggCount = cached,
+                        status = when {
+                            cached > 0 -> "可从 OGG 断点继续"
+                            rootOk -> "已就绪"
+                            else -> "需要 Root 授权"
+                        }
                     )
                 }
-                appendLog("环境检查：Root=${if (rootOk) "可用" else "不可用"}，Phigros=${pi.versionName ?: "已安装"}，split=$splits")
+                appendLog(
+                    "环境检查：Root=${if (rootOk) "可用" else "不可用"}，" +
+                        "Phigros=${pi.versionName ?: "已安装"}，split=$splits，OGG断点=$cached 首"
+                )
             } catch (_: PackageManager.NameNotFoundException) {
                 onUi {
                     uiState = uiState.copy(
                         rootOk = rootOk,
                         phigrosInstalled = false,
+                        cachedOggCount = 0,
                         status = "未检测到 Phigros"
                     )
                 }
@@ -244,56 +260,75 @@ class MainActivity : ComponentActivity() {
         appendLog("元数据写入始终启用，与封面开关无关。")
 
         worker.execute {
-            val workRoot = File(cacheDir, "phigros_extract_v4")
-            deleteRecursively(workRoot)
-            val apkDir = File(workRoot, "apks").apply { mkdirs() }
-            val rawDir = File(workRoot, "raw").apply { mkdirs() }
-            val finalDir = File(workRoot, "final").apply { mkdirs() }
-            val coverDir = File(workRoot, "covers").apply { mkdirs() }
-            val pythonLog = File(workRoot, "extract-progress.log")
+            val processRoot = File(cacheDir, "phigros_process_v5")
+            deleteRecursively(processRoot)
+            val apkDir = File(processRoot, "apks").apply { mkdirs() }
+            val finalDir = File(processRoot, "final").apply { mkdirs() }
+            val coverDir = File(processRoot, "covers").apply { mkdirs() }
+            val pythonLog = File(processRoot, "extract-progress.log")
+            val checkpointRoot = File(filesDir, CHECKPOINT_DIR).apply { mkdirs() }
+            val rawDir = File(checkpointRoot, "raw").apply { mkdirs() }
 
             try {
-                if (!checkRoot()) {
-                    throw IllegalStateException("未获得 Root。请在 Root 管理器中允许本应用的 su 请求。")
-                }
+                val version = snapshot.phigrosVersion
+                var rawTracks = prepareReusableOggCheckpoint(version)
 
-                phase("正在定位 Phigros 安装包…", 0.02f)
-                val sourceApks = getPhigrosApkPaths()
-                if (sourceApks.isEmpty()) throw IllegalStateException("没有找到 Phigros APK。")
-                appendLog("定位到 ${sourceApks.size} 个 APK 文件。")
-
-                val localApks = ArrayList<String>()
-                sourceApks.forEachIndexed { index, source ->
-                    phase("正在读取 APK ${index + 1}/${sourceApks.size}…", 0.03f + index.toFloat() / sourceApks.size * 0.07f)
-                    val dst = File(apkDir, String.format(Locale.US, "%02d.apk", index))
-                    copyProtectedFile(source, dst)
-                    localApks += dst.absolutePath
-                    appendLog("APK 已缓存：${dst.name}，${formatBytes(dst.length())}")
-                }
-
-                phase("正在并发解析 Addressables / UnityFS / FSB5…", 0.10f)
-                startPythonLogPolling(pythonLog)
-                try {
-                    Python.getInstance().getModule("extractor").callAttr(
-                        "extract_from_apks",
-                        localApks.joinToString("\n"),
-                        rawDir.absolutePath,
-                        applicationInfo.nativeLibraryDir,
-                        pythonLog.absolutePath,
-                        pythonWorkers
+                if (rawTracks.isNotEmpty()) {
+                    phase("检测到 OGG 断点，直接继续整理…", 0.55f)
+                    appendLog(
+                        "[断点续跑] 复用 ${rawTracks.size} 首 OGG；" +
+                            "跳过 APK → Addressables → UnityFS → FSB5。"
                     )
-                } finally {
-                    drainPythonLog(pythonLog)
-                    stopPythonLogPolling()
-                }
+                } else {
+                    if (!checkRoot()) {
+                        throw IllegalStateException("未获得 Root。请在 Root 管理器中允许本应用的 su 请求。")
+                    }
 
-                val rawTracks = discoverRawTracks(rawDir)
-                if (rawTracks.isEmpty()) throw IllegalStateException("解析完成，但没有得到可处理的音乐。")
-                appendLog("本地音频提取完成：${rawTracks.size} 首。")
+                    phase("正在定位 Phigros 安装包…", 0.02f)
+                    val sourceApks = getPhigrosApkPaths()
+                    if (sourceApks.isEmpty()) throw IllegalStateException("没有找到 Phigros APK。")
+                    appendLog("定位到 ${sourceApks.size} 个 APK 文件。")
+
+                    val localApks = ArrayList<String>()
+                    sourceApks.forEachIndexed { index, source ->
+                        phase(
+                            "正在读取 APK ${index + 1}/${sourceApks.size}…",
+                            0.03f + index.toFloat() / sourceApks.size * 0.07f
+                        )
+                        val dst = File(apkDir, String.format(Locale.US, "%02d.apk", index))
+                        copyProtectedFile(source, dst)
+                        localApks += dst.absolutePath
+                        appendLog("APK 已缓存：${dst.name}，${formatBytes(dst.length())}")
+                    }
+
+                    phase("正在并发解析 Addressables / UnityFS / FSB5…", 0.10f)
+                    startPythonLogPolling(pythonLog)
+                    try {
+                        Python.getInstance().getModule("extractor").callAttr(
+                            "extract_from_apks",
+                            localApks.joinToString("\n"),
+                            rawDir.absolutePath,
+                            applicationInfo.nativeLibraryDir,
+                            pythonLog.absolutePath,
+                            pythonWorkers
+                        )
+                    } finally {
+                        drainPythonLog(pythonLog)
+                        stopPythonLogPolling()
+                    }
+
+                    rawTracks = discoverRawTracks(rawDir)
+                    if (rawTracks.isEmpty()) {
+                        throw IllegalStateException("解析完成，但没有得到可处理的音乐。")
+                    }
+                    writeCheckpoint(version, rawTracks.size)
+                    onUi { uiState = uiState.copy(cachedOggCount = rawTracks.size) }
+                    appendLog("本地音频提取完成：${rawTracks.size} 首；OGG 断点已持久保存。")
+                }
 
                 phase("正在加载 Phigros 曲目信息…", 0.55f)
                 val catalog = try {
-                    RemoteCatalog.load(this, File(workRoot, "metadata-cache"), ::appendLog)
+                    RemoteCatalog.load(this, File(processRoot, "metadata-cache"), ::appendLog)
                 } catch (t: Throwable) {
                     appendLog("曲目信息同步失败：${readableMessage(t)}")
                     appendLog("将继续处理音频；无法确认的文字字段不会伪造。")
@@ -316,7 +351,10 @@ class MainActivity : ComponentActivity() {
                                 illustrator = ""
                             )
                             val sourceInfo = AudioProcessor.probe(raw.rawFile)
-                            appendLog("[源音质] ${meta.title}: ${sourceInfo.describe()}${if (sourceInfo.isHiRes) " · Hi-Res" else ""}")
+                            appendLog(
+                                "[源音质] ${meta.title}: ${sourceInfo.describe()}" +
+                                    if (sourceInfo.isHiRes) " · Hi-Res" else ""
+                            )
 
                             val cover = if (fetchCover && meta.remoteId != null) {
                                 val dst = File(coverDir, "${safeFileName(raw.songId)}.png")
@@ -328,7 +366,10 @@ class MainActivity : ComponentActivity() {
                                 }.getOrNull()
                             } else null
 
-                            appendLog("[转码] ${meta.title} → ${format.displayName}${if (cover != null) " + 封面" else ""}")
+                            appendLog(
+                                "[转码] ${meta.title} → ${format.displayName}" +
+                                    if (cover != null) " + 封面" else ""
+                            )
                             AudioProcessor.convert(
                                 inputOgg = raw.rawFile,
                                 outputFile = destinations.getValue(raw.songId),
@@ -336,7 +377,12 @@ class MainActivity : ComponentActivity() {
                                 format = format,
                                 meta = meta
                             )
-                            ProcessedTrack(raw, destinations.getValue(raw.songId), cover != null, sourceInfo)
+                            ProcessedTrack(
+                                raw,
+                                destinations.getValue(raw.songId),
+                                cover != null,
+                                sourceInfo
+                            )
                         }
                     }
 
@@ -348,19 +394,32 @@ class MainActivity : ComponentActivity() {
                         done++
                         if (processed.coverEmbedded) covers++
                         if (processed.sourceInfo.isHiRes) hiRes++
-                        appendLog("[完成] ${processed.outputFile.name} · ${formatBytes(processed.outputFile.length())}")
-                        phase("正在转码 $done/${rawTracks.size}…", 0.60f + done.toFloat() / rawTracks.size * 0.33f)
+                        appendLog(
+                            "[完成] ${processed.outputFile.name} · " +
+                                formatBytes(processed.outputFile.length())
+                        )
+                        phase(
+                            "正在转码 $done/${rawTracks.size}…",
+                            0.60f + done.toFloat() / rawTracks.size * 0.33f
+                        )
                     }
-                    appendLog("转码完成：${rawTracks.size} 首；Hi-Res 源 $hiRes 首；嵌入封面 $covers 首。")
+                    appendLog(
+                        "转码完成：${rawTracks.size} 首；Hi-Res 源 $hiRes 首；嵌入封面 $covers 首。"
+                    )
                 } finally {
                     pool.shutdownNow()
                 }
 
                 phase("正在写入你选择的目录…", 0.94f)
-                val finalFiles = finalDir.listFiles { f -> f.isFile && f.extension.equals(format.extension, true) }
-                    ?.sortedBy { it.name.lowercase(Locale.ROOT) }
-                    .orEmpty()
-                val finalCopied = copyFilesToTree(finalFiles, outputUri, 0.94f, if (keepOgg) 0.985f else 1f)
+                val finalFiles = finalDir.listFiles { f ->
+                    f.isFile && f.extension.equals(format.extension, true)
+                }?.sortedBy { it.name.lowercase(Locale.ROOT) }.orEmpty()
+                val finalCopied = copyFilesToTree(
+                    finalFiles,
+                    outputUri,
+                    0.94f,
+                    if (keepOgg) 0.985f else 1f
+                )
 
                 var oggCopied = 0
                 if (keepOgg) {
@@ -369,11 +428,15 @@ class MainActivity : ComponentActivity() {
                     oggCopied = copyFilesToTree(originals, outputUri, 0.985f, 1f)
                 }
 
-                appendLog("全部完成：${format.displayName} $finalCopied 首${if (keepOgg) "，OGG $oggCopied 首" else ""}。")
+                appendLog(
+                    "全部完成：${format.displayName} $finalCopied 首" +
+                        if (keepOgg) "，OGG $oggCopied 首。" else "。"
+                )
                 onUi {
                     uiState = uiState.copy(
                         running = false,
                         progress = 1f,
+                        cachedOggCount = rawTracks.size,
                         status = "完成：已写入 $finalCopied 首 ${format.displayName}"
                     )
                 }
@@ -381,11 +444,122 @@ class MainActivity : ComponentActivity() {
                 stopPythonLogPolling()
                 val message = readableMessage(t)
                 appendLog("任务失败：$message")
-                onUi { uiState = uiState.copy(running = false, progress = 0f, status = "失败：$message") }
+                appendLog("OGG 断点会保留；修复后再次点击开始即可从 OGG 继续。")
+                onUi {
+                    uiState = uiState.copy(
+                        running = false,
+                        progress = 0f,
+                        status = "失败：$message"
+                    )
+                }
             } finally {
-                deleteRecursively(apkDir)
+                deleteRecursively(processRoot)
             }
         }
+    }
+
+    private fun prepareReusableOggCheckpoint(currentVersion: String): List<RawTrack> {
+        val checkpointRoot = File(filesDir, CHECKPOINT_DIR)
+        val rawDir = File(checkpointRoot, "raw")
+        val metaFile = File(checkpointRoot, CHECKPOINT_META)
+
+        val existing = discoverRawTracks(rawDir)
+        if (existing.isNotEmpty() && metaFile.isFile) {
+            val props = readProperties(metaFile)
+            val storedVersion = props.getProperty("phigros_version", "")
+            val storedCount = props.getProperty("ogg_count", "0").toIntOrNull() ?: 0
+            if (storedVersion == currentVersion && storedCount == existing.size) {
+                return existing
+            }
+            appendLog(
+                "OGG 断点失效：版本/数量不匹配（缓存 $storedVersion/$storedCount，" +
+                    "当前 $currentVersion/${existing.size}），将重新提取。"
+            )
+            deleteRecursively(checkpointRoot)
+        } else if (existing.isNotEmpty()) {
+            appendLog("OGG 断点缺少版本信息，为避免使用陈旧资源，将重新提取。")
+            deleteRecursively(checkpointRoot)
+        }
+
+        // Upgrade path for the user's already-completed OGG extraction from
+        // versions before persistent checkpoints existed. Only accept it when
+        // the old extraction log proves the extractor reached its final summary.
+        val legacyRoot = File(cacheDir, LEGACY_WORK_DIR)
+        val legacyRaw = File(legacyRoot, "raw")
+        val legacyLog = File(legacyRoot, "extract-progress.log")
+        val legacyTracks = discoverRawTracks(legacyRaw)
+        if (legacyTracks.isNotEmpty() && legacyExtractionFinished(legacyLog)) {
+            rawDir.mkdirs()
+            legacyTracks.forEach { track ->
+                val dst = File(rawDir, track.rawFile.name)
+                BufferedInputStream(FileInputStream(track.rawFile)).use { input ->
+                    BufferedOutputStream(FileOutputStream(dst)).use { output ->
+                        copyStream(input, output)
+                    }
+                }
+            }
+            val migrated = discoverRawTracks(rawDir)
+            if (migrated.isNotEmpty()) {
+                writeCheckpoint(currentVersion, migrated.size)
+                appendLog(
+                    "[断点迁移] 找到上一版已经提取完成的 ${migrated.size} 首 OGG，" +
+                        "已迁移到持久断点；本轮不会重新解包。"
+                )
+                return migrated
+            }
+        }
+
+        rawDir.mkdirs()
+        return emptyList()
+    }
+
+    private fun inspectReusableOggCount(currentVersion: String): Int {
+        val checkpointRoot = File(filesDir, CHECKPOINT_DIR)
+        val rawDir = File(checkpointRoot, "raw")
+        val metaFile = File(checkpointRoot, CHECKPOINT_META)
+        val tracks = discoverRawTracks(rawDir)
+        if (tracks.isNotEmpty() && metaFile.isFile) {
+            val props = readProperties(metaFile)
+            val version = props.getProperty("phigros_version", "")
+            val count = props.getProperty("ogg_count", "0").toIntOrNull() ?: 0
+            if (version == currentVersion && count == tracks.size) return tracks.size
+        }
+
+        val legacyRoot = File(cacheDir, LEGACY_WORK_DIR)
+        val legacyTracks = discoverRawTracks(File(legacyRoot, "raw"))
+        return if (legacyTracks.isNotEmpty() && legacyExtractionFinished(File(legacyRoot, "extract-progress.log"))) {
+            legacyTracks.size
+        } else 0
+    }
+
+    private fun legacyExtractionFinished(logFile: File): Boolean {
+        if (!logFile.isFile) return false
+        val text = runCatching { logFile.readText(Charsets.UTF_8) }.getOrDefault("")
+        if (text.contains("[汇总] 解析结束：")) return true
+        var finished = false
+        LEGACY_PROGRESS_PATTERN.matcher(text).let { matcher ->
+            while (matcher.find()) {
+                val done = matcher.group(1)?.toIntOrNull() ?: continue
+                val total = matcher.group(2)?.toIntOrNull() ?: continue
+                if (total > 0 && done == total) finished = true
+            }
+        }
+        return finished
+    }
+
+    private fun writeCheckpoint(version: String, count: Int) {
+        val root = File(filesDir, CHECKPOINT_DIR).apply { mkdirs() }
+        val props = Properties().apply {
+            setProperty("phigros_version", version)
+            setProperty("ogg_count", count.toString())
+            setProperty("completed", "true")
+            setProperty("updated_at", System.currentTimeMillis().toString())
+        }
+        FileOutputStream(File(root, CHECKPOINT_META)).use { props.store(it, "Phigros OGG checkpoint") }
+    }
+
+    private fun readProperties(file: File): Properties = Properties().apply {
+        FileInputStream(file).use(::load)
     }
 
     private fun allocateDestinations(
@@ -418,8 +592,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun discoverRawTracks(rawDir: File): List<RawTrack> =
-        rawDir.listFiles { file -> file.isFile && file.length() > 0L && file.extension.equals("ogg", true) }
-            .orEmpty()
+        rawDir.listFiles { file ->
+            file.isFile && file.length() > 0L && file.extension.equals("ogg", true)
+        }.orEmpty()
             .sortedBy { it.name.lowercase(Locale.ROOT) }
             .map { RawTrack(it.nameWithoutExtension, it) }
 
@@ -442,7 +617,9 @@ class MainActivity : ComponentActivity() {
     private fun copyProtectedFile(source: String, destination: File) {
         try {
             BufferedInputStream(FileInputStream(source)).use { input ->
-                BufferedOutputStream(FileOutputStream(destination)).use { output -> copyStream(input, output) }
+                BufferedOutputStream(FileOutputStream(destination)).use { output ->
+                    copyStream(input, output)
+                }
             }
             if (destination.length() > 0L) return
         } catch (_: Throwable) {
@@ -456,7 +633,9 @@ class MainActivity : ComponentActivity() {
         if (code != 0 || destination.length() == 0L) {
             val err = p.errorStream.use { String(readFully(it), StandardCharsets.UTF_8).trim() }
             destination.delete()
-            throw IllegalStateException("Root 读取 APK 失败：$source${if (err.isBlank()) "" else "\n$err"}")
+            throw IllegalStateException(
+                "Root 读取 APK 失败：$source${if (err.isBlank()) "" else "\n$err"}"
+            )
         }
     }
 
@@ -524,7 +703,12 @@ class MainActivity : ComponentActivity() {
             if (matcher.find()) {
                 val done = matcher.group(1)?.toIntOrNull() ?: return@forEach
                 val total = matcher.group(2)?.toIntOrNull() ?: return@forEach
-                if (total > 0) phase("正在提取音乐 $done/$total…", 0.10f + done.toFloat() / total * 0.45f)
+                if (total > 0) {
+                    phase(
+                        "正在提取音乐 $done/$total…",
+                        0.10f + done.toFloat() / total * 0.45f
+                    )
+                }
             }
         }
     }
@@ -557,6 +741,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private val PY_PROGRESS_PATTERN = Pattern.compile("\\[进度\\]\\s+(\\d+)/(\\d+)")
+        private val LEGACY_PROGRESS_PATTERN = Pattern.compile("\\[进度\\]\\s+(\\d+)/(\\d+)")
 
         fun safeFileName(value: String): String = value
             .replace(Regex("""[\\/:*?"<>|\u0000-\u001f]+"""), "_")
@@ -623,7 +808,9 @@ private fun AppScreen(
         dark -> darkColorScheme()
         else -> expressiveLightColorScheme()
     }
-    val directoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    val directoryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
         if (uri != null) onOutputUri(uri)
     }
 
@@ -638,22 +825,37 @@ private fun AppScreen(
                     .padding(horizontal = 18.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text("Phigros Music Extractor", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                 Text(
-                    "Root 本地提取 · Hi-Res 保护 · 完整标签 · Material 3 Expressive",
+                    "Phigros Music Extractor",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Root 本地提取 · OGG 断点续跑 · Hi-Res 保护 · 完整标签 · Material 3 Expressive",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 StatusCard(state)
 
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("输出设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(state.outputUri?.toString() ?: "尚未选择输出目录", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "输出设置",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            state.outputUri?.toString() ?: "尚未选择输出目录",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                         FilledTonalButton(
                             onClick = { directoryLauncher.launch(state.outputUri) },
                             enabled = !state.running
@@ -666,7 +868,10 @@ private fun AppScreen(
                                     selected = state.outputFormat == format,
                                     onClick = { onFormat(format) },
                                     enabled = !state.running,
-                                    shape = SegmentedButtonDefaults.itemShape(index, OutputFormat.entries.size),
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index,
+                                        OutputFormat.entries.size
+                                    ),
                                     label = { Text(format.displayName) }
                                 )
                             }
@@ -692,7 +897,7 @@ private fun AppScreen(
                 )
                 SettingCard(
                     title = "同时保留原始 OGG",
-                    subtitle = "额外保存由 Phigros FSB5 重建出的 OGG，便于和 FLAC/MP3 参数对照。",
+                    subtitle = "额外写到你选择的目录；应用内部的 OGG 断点会自动保留用于失败后续跑。",
                     checked = state.keepOgg,
                     enabled = !state.running,
                     onCheckedChange = onKeepOgg
@@ -702,10 +907,25 @@ private fun AppScreen(
                     onClick = onStart,
                     enabled = !state.running && state.outputUri != null && state.phigrosInstalled,
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (state.running) "处理中…" else "开始提取并整理音乐") }
+                ) {
+                    Text(
+                        when {
+                            state.running -> "处理中…"
+                            state.cachedOggCount > 0 -> "从 OGG 断点继续整理"
+                            else -> "开始提取并整理音乐"
+                        }
+                    )
+                }
 
-                LinearWavyProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
-                Text(state.status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LinearWavyProgressIndicator(
+                    progress = { state.progress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    state.status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 LogCard(logs)
                 Spacer(Modifier.height(8.dp))
             }
@@ -720,12 +940,27 @@ private fun StatusCard(state: AppUiState) {
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("设备状态", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text("Root：${when (state.rootOk) { true -> "可用"; false -> "不可用"; null -> "检测中" }}")
+            Text(
+                "设备状态",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Root：${when (state.rootOk) {
+                    true -> "可用"
+                    false -> "不可用"
+                    null -> "检测中"
+                }}"
+            )
             Text(
                 if (state.phigrosInstalled)
                     "Phigros：${state.phigrosVersion.ifBlank { "已安装" }} · base + ${state.splitCount} split"
                 else "Phigros：未检测到"
+            )
+            Text(
+                if (state.cachedOggCount > 0)
+                    "OGG 断点：${state.cachedOggCount} 首，可直接继续转码"
+                else "OGG 断点：暂无"
             )
         }
     }
@@ -745,7 +980,11 @@ private fun SettingCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
         }
     }
@@ -757,12 +996,23 @@ private fun LogCard(logs: List<String>) {
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
     }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+        )
+    ) {
         Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-            Text("运行日志 / 音质验收", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                "运行日志 / 音质验收",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
             Spacer(Modifier.height(8.dp))
             SelectionContainer {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(300.dp)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().height(300.dp)
+                ) {
                     items(logs) { line ->
                         Text(
                             line,
