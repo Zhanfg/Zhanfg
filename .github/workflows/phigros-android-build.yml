@@ -46,6 +46,17 @@ jobs:
         with:
           gradle-version: '9.4.1'
 
+      - name: Vendor python-fsb5
+        shell: bash
+        run: |
+          rm -rf scratch/phigros-android-extractor/app/vendor/python-fsb5
+          mkdir -p scratch/phigros-android-extractor/app/vendor
+          git clone --quiet https://github.com/HearthSim/python-fsb5.git scratch/phigros-android-extractor/app/vendor/python-fsb5
+          git -C scratch/phigros-android-extractor/app/vendor/python-fsb5 checkout --quiet 5acfaed9b44167eeebbd5f0414745cc23a2104a7
+          rm -rf scratch/phigros-android-extractor/app/vendor/python-fsb5/.git
+          test -f scratch/phigros-android-extractor/app/vendor/python-fsb5/fsb5/__init__.py
+          test -f scratch/phigros-android-extractor/app/vendor/python-fsb5/fsb5/vorbis_headers.py
+
       - name: Validate source tree
         shell: bash
         run: |
