@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'cc.axymorrsen.phigrosextractor'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId 'cc.axymorrsen.phigrosextractor'
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName '0.1.0'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = '3.13'
+        buildPython('python3.13')
+        pip {
+            install 'lz4'
+            install 'fsb5==1.0'
+            install 'chaquopy-libogg'
+            install 'chaquopy-libvorbis'
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.documentfile:documentfile:1.1.0'
+}
