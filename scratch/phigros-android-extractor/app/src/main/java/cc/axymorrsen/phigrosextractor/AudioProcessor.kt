@@ -64,6 +64,33 @@ object AudioProcessor {
         )
     }
 
+    private fun probeTags(input: File): Map<String, String> {
+        val session = FFprobeKit.executeWithArguments(
+            arrayOf(
+                "-v", "error",
+                "-show_entries", "format_tags",
+                "-of", "json",
+                input.absolutePath
+            )
+        )
+        if (!ReturnCode.isSuccess(session.getReturnCode())) {
+            throw IllegalStateException(
+                "无法验收导出标签：${session.getOutput().takeLast(2000)}"
+            )
+        }
+        val tags = JSONObject(session.getOutput())
+            .optJSONObject("format")
+            ?.optJSONObject("tags")
+            ?: return emptyMap()
+        val result = LinkedHashMap<String, String>()
+        val keys = tags.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            result[key.lowercase()] = tags.optString(key)
+        }
+        return result
+    }
+
     fun convert(
         inputOgg: File,
         outputFile: File,
@@ -75,14 +102,14 @@ object AudioProcessor {
 
         if (format == OutputFormat.MP3 && source.isHiRes) {
             throw IllegalStateException(
-                "检测到 Hi-Res 源参数 ${source.describe()}。MP3 标准无法保留 >48 kHz 或 >16-bit 的 Hi-Res 属性；" +
+                "检测到 Hi-Res 源参数 ${source.describe()}。MP3 无法原样保留 >48 kHz 或 >16-bit 的高规格属性；" +
                     "为防止静默降级，本曲已停止转换，请改选 FLAC。"
             )
         }
         if (format == OutputFormat.FLAC && source.effectiveBits > 24) {
             throw IllegalStateException(
-                "检测到 ${source.effectiveBits}-bit 源。标准 FLAC 最高保存 24-bit PCM；" +
-                    "为避免把 32-bit/float 源静默截断，本曲已停止转换。"
+                "检测到 ${source.effectiveBits}-bit 源。FLAC 规范虽支持 32-bit，" +
+                    "但当前兼容输出策略只承诺到 24-bit；为避免在部分播放器上静默降位，本曲已停止转换。"
             )
         }
 
@@ -155,10 +182,10 @@ object AudioProcessor {
                     args += source.channels.toString()
                 }
                 if (source.isHiRes) {
-                    // Vorbis has no conventional PCM bit-depth field. For a
-                    // high-rate source (or a true >16-bit PCM source), use the
-                    // FLAC encoder's 24-bit-capable s32 path so the export is
-                    // never silently truncated to 16-bit.
+                    // Vorbis/OGG does not carry a conventional PCM bit-depth
+                    // field. For a high-sample-rate source, feed the FLAC
+                    // encoder through S32; FFmpeg's compatibility path emits a
+                    // 24-bit FLAC while preserving the original sample rate.
                     args += "-sample_fmt"
                     args += "s32"
                 }
@@ -258,6 +285,21 @@ object AudioProcessor {
             )
         }
 
+        val tags = probeTags(temp)
+        verifyTag(tags, "title", meta.title)
+        verifyTag(tags, "source_song_id", meta.songId)
+        verifyTag(tags, "source_game", "Phigros")
+        if (meta.composer.isNotBlank()) {
+            verifyTag(tags, "artist", meta.composer)
+            verifyTag(tags, "composer", meta.composer)
+        }
+        if (meta.chapter.isNotBlank()) {
+            verifyTag(tags, "album", meta.chapter)
+        }
+        if (meta.illustrator.isNotBlank()) {
+            verifyTag(tags, "illustrator", meta.illustrator)
+        }
+
         if (outputFile.exists()) outputFile.delete()
         if (!temp.renameTo(outputFile)) {
             temp.copyTo(outputFile, overwrite = true)
@@ -269,5 +311,15 @@ object AudioProcessor {
         if (value.isBlank()) return
         args += "-metadata"
         args += "$key=$value"
+    }
+
+    private fun verifyTag(tags: Map<String, String>, key: String, expected: String) {
+        if (expected.isBlank()) return
+        val actual = tags[key.lowercase()]
+        if (actual != expected) {
+            throw IllegalStateException(
+                "标签验收失败：$key 期望 '$expected'，实际 '${actual ?: "<missing>"}'。已阻止写出。"
+            )
+        }
     }
 }
