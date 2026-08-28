@@ -1,0 +1,53 @@
+name: MFGA Publish Direct Flash ZIP
+
+on:
+  push:
+    branches:
+      - tmp/mfga-fast-build-20260828
+    paths:
+      - .github/workflows/mfga-publish-direct.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download successful build artifact and extract actual module ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mfga
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            '/repos/Zhanfg/Zhanfg/actions/artifacts/9692419524/zip' \
+            > /tmp/mfga/artifact-wrapper.zip
+          unzip -q /tmp/mfga/artifact-wrapper.zip -d /tmp/mfga/out
+          MOD='/tmp/mfga/out/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip'
+          test -f "$MOD"
+
+          # This must be the actual flashable module, not an Actions wrapper.
+          unzip -p "$MOD" module.prop | grep -q '^id=MFGA$'
+          unzip -l "$MOD" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$MOD" | grep -q 'customize.sh'
+          unzip -t "$MOD" >/tmp/mfga/ZIP-TEST.txt
+          sha256sum "$MOD" | tee /tmp/mfga/SHA256SUMS.txt
+
+      - name: Publish direct flashable Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='mfga-fast-public-20260828-r1'
+          MOD='/tmp/mfga/out/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip'
+          gh release delete "$TAG" --cleanup-tag -y 2>/dev/null || true
+          gh release create "$TAG" \
+            "$MOD" \
+            '/tmp/mfga/SHA256SUMS.txt' \
+            '/tmp/mfga/ZIP-TEST.txt' \
+            --title 'MFGA Fast Public 20260828 r1' \
+            --notes 'Direct-flash build. Download MFGA-LXGW-SourceSans3-FastPublic-20260828.zip itself; do not wrap or extract/recompress it before flashing. Built by Actions run 33187709092. Static font/XML/ZIP QA passed. Device boot is not yet verified.'
