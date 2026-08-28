@@ -1,0 +1,317 @@
+name: MFGA Fast Public Build
+
+on:
+  push:
+    branches:
+      - tmp/mfga-fast-build-20260828
+    paths:
+      - .github/workflows/mfga-fast-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mfga-fast-public-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'fonttools==4.60.1'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full zip
+
+      - name: Download public MFGA base and font sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/base work/lxgw work/latin work/mono work/math work/plangothic dist
+
+          curl -fL --retry 4 \
+            'https://github.com/Numbersf/MakeFontsGreatAgain/releases/download/1717180001/MFGA-SELFUSE-17.0.0.06-27-alpha.1717180001.zip' \
+            -o work/mfga-base.zip
+          7z x -y -owork/base work/mfga-base.zip >/dev/null
+          test -f work/base/module.prop
+
+          # Prefer the successful 2026-08-13 current-main build artifact. If GitHub
+          # does not allow cross-repository artifact download with this token,
+          # rebuild the exact source revision instead.
+          if gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              '/repos/lxgw/LxgwWenKai/actions/artifacts/9173285193/zip' \
+              > work/lxgw-current.zip 2>/dev/null && \
+             7z t work/lxgw-current.zip >/dev/null 2>&1; then
+            echo 'Using LXGW current-main Actions artifact 9173285193.'
+            7z x -y -owork/lxgw work/lxgw-current.zip >/dev/null
+          else
+            echo 'Cross-repo artifact download unavailable; rebuilding LXGW commit 50f4b182415a8c33d9a456df220b66a284e2509b.'
+            rm -f work/lxgw-current.zip
+            git clone --recursive https://github.com/lxgw/LxgwWenKai.git work/lxgw-src
+            git -C work/lxgw-src checkout 50f4b182415a8c33d9a456df220b66a284e2509b
+            git -C work/lxgw-src submodule update --init --recursive
+            python -m pip install -r work/lxgw-src/requirements.txt
+            make -C work/lxgw-src build
+            find work/lxgw-src/fonts/TTF -maxdepth 1 -type f -name '*.ttf' -exec cp '{}' work/lxgw/ \;
+          fi
+
+          for f in \
+            SourceSans3-ExtraLight.ttf SourceSans3-ExtraLightIt.ttf \
+            SourceSans3-Light.ttf SourceSans3-LightIt.ttf \
+            SourceSans3-Regular.ttf SourceSans3-It.ttf \
+            SourceSans3-Medium.ttf SourceSans3-MediumIt.ttf \
+            SourceSans3-Semibold.ttf SourceSans3-SemiboldIt.ttf \
+            SourceSans3-Bold.ttf SourceSans3-BoldIt.ttf \
+            SourceSans3-Black.ttf SourceSans3-BlackIt.ttf; do
+            curl -fL --retry 4 \
+              "https://raw.githubusercontent.com/adobe-fonts/source-sans/3.052R/TTF/$f" \
+              -o "work/latin/$f"
+          done
+
+          for f in JetBrainsMono-Regular.ttf JetBrainsMono-Italic.ttf JetBrainsMono-Bold.ttf JetBrainsMono-BoldItalic.ttf; do
+            curl -fL --retry 4 \
+              "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/fonts/ttf/$f" \
+              -o "work/mono/$f"
+          done
+
+          curl -fL --retry 4 \
+            'https://github.com/IBM/plex/releases/download/%40ibm/plex-math%401.1.0/ibm-plex-math.zip' \
+            -o work/ibm-plex-math.zip
+          7z x -y -owork/math work/ibm-plex-math.zip >/dev/null
+
+          curl -fL --retry 4 \
+            'https://github.com/Fitzgerald-Porthmouth-Koenigsegg/Plangothic_Project/releases/download/V2.9.5795/Plangothic-Static-V2.9.5795.zip' \
+            -o work/plangothic.zip
+          7z x -y -owork/plangothic work/plangothic.zip >/dev/null
+
+      - name: Assemble fast module
+        run: |
+          set -euo pipefail
+          rm -rf work/module
+          cp -a work/base work/module
+          python - <<'PY'
+          from pathlib import Path
+          from fontTools.ttLib import TTFont
+          import shutil, xml.etree.ElementTree as ET, hashlib, json, re
+
+          root = Path('work/module')
+          fonts = root / 'system' / 'fonts'
+          fonts.mkdir(parents=True, exist_ok=True)
+
+          def find_one(base: Path, name: str) -> Path:
+              hits = list(base.rglob(name))
+              if len(hits) != 1:
+                  raise SystemExit(f'Expected exactly one {name}, got {hits}')
+              return hits[0]
+
+          lxgw = Path('work/lxgw')
+          srcs = {
+              200: find_one(lxgw, 'LXGWWenKai-Light.ttf'),
+              300: find_one(lxgw, 'LXGWWenKai-Light.ttf'),
+              400: find_one(lxgw, 'LXGWWenKai-Regular.ttf'),
+              700: find_one(lxgw, 'LXGWWenKai-Medium.ttf'),
+          }
+          pua_conflicts = {0xE003, *range(0xE501, 0xE508)}
+
+          def set_name(font, nid, value):
+              for n in font['name'].names:
+                  if n.nameID == nid:
+                      try:
+                          n.string = value.encode(n.getEncoding())
+                      except Exception:
+                          pass
+
+          for weight, source in srcs.items():
+              f = TTFont(source, recalcBBoxes=False, recalcTimestamp=False)
+              for sub in f['cmap'].tables:
+                  if sub.isUnicode():
+                      for cp in pua_conflicts:
+                          sub.cmap.pop(cp, None)
+              if 'OS/2' in f:
+                  f['OS/2'].usWeightClass = weight
+              if 'head' in f:
+                  f['head'].macStyle = 1 if weight >= 700 else 0
+              family = 'MFGA LXGW WenKai Main'
+              style = {200:'ExtraLight',300:'Light',400:'Regular',700:'Bold'}[weight]
+              set_name(f, 1, family)
+              set_name(f, 2, style)
+              set_name(f, 4, f'{family} {style}')
+              set_name(f, 6, f'MFGALXGWWenKaiMain-{style}')
+              set_name(f, 5, 'LXGW main snapshot 2026-08-13; commit 50f4b182415a; MFGA fast public build 2026-08-28')
+              f.save(fonts / f'{weight}.ttf', reorderTables=None)
+
+          for obsolete in ('100.ttf','500.ttf','600.ttf','800.ttf','900.ttf'):
+              (fonts / obsolete).unlink(missing_ok=True)
+
+          # Current Plangothic public release. This avoids regressing to the older
+          # January P1/P2 bundled in MFGA 17.0.0.
+          pg = Path('work/plangothic')
+          shutil.copy2(find_one(pg, 'PlangothicP1-Regular.ttf'), fonts / 'PlangothicP1.ttf')
+          shutil.copy2(find_one(pg, 'PlangothicP2-Regular.ttf'), fonts / 'PlangothicP2.ttf')
+
+          # Reproduce the Unicode16 cleanup used by the supplied updated file:
+          # 186 PUA mappings are delegated to the dedicated private-use layer.
+          u16 = fonts / 'Unicode16-new.ttf'
+          f = TTFont(u16, recalcBBoxes=False, recalcTimestamp=False)
+          ranges = [
+              (0xE000,0xE004),(0xE006,0xE01F),(0xE024,0xE055),(0xE093,0xE094),
+              (0xE203,0xE206),(0xE20D,0xE20F),(0xE212,0xE218),(0xE21A,0xE21B),
+              (0xE21D,0xE242),(0xE247,0xE24A),(0xE24C,0xE253),(0xE255,0xE258),
+              (0xE25B,0xE25C),(0xE817,0xE818),(0xE81A,0xE81D),(0xE840,0xE840),
+              (0xE870,0xE870),(0xE873,0xE87A),(0xEEE8,0xEEE8),(0xEEEB,0xEEEB),
+              (0xF04D,0xF04D),(0xF064,0xF064),(0xF0C0,0xF0C0),(0xF0ED,0xF0ED),
+              (0xF11D,0xF11D),(0xF123,0xF123),(0xF134,0xF134),(0xF19C,0xF19C),
+              (0xF1A2,0xF1A2),(0xF1E7,0xF1E7),(0xF228,0xF228),(0xF23D,0xF23D),
+              (0xF8FE,0xF8FE),
+          ]
+          remove = {cp for a,b in ranges for cp in range(a,b+1)}
+          assert len(remove) == 186
+          for sub in f['cmap'].tables:
+              if sub.isUnicode():
+                  for cp in remove:
+                      sub.cmap.pop(cp, None)
+          f.save(u16, reorderTables=None)
+
+          # Source Sans 3 becomes the named sans-serif family. CJK characters it
+          # does not contain naturally continue through the unnamed LXGW fallback.
+          latin = Path('work/latin')
+          for p in latin.glob('*.ttf'):
+              shutil.copy2(p, fonts / p.name)
+
+          mono = Path('work/mono')
+          for p in mono.glob('*.ttf'):
+              shutil.copy2(p, fonts / p.name)
+
+          math_candidates = [p for p in Path('work/math').rglob('*') if p.is_file() and p.suffix.lower() in {'.ttf','.otf'} and 'Plex' in p.name and 'Math' in p.name]
+          if not math_candidates:
+              raise SystemExit('IBM Plex Math font not found')
+          math_src = sorted(math_candidates, key=lambda p: len(str(p)))[0]
+          math_name = 'IBMPlexMath-Regular' + math_src.suffix.lower()
+          shutil.copy2(math_src, fonts / math_name)
+
+          xml_path = root / 'fonts.xml'
+          tree = ET.parse(xml_path)
+          xr = tree.getroot()
+
+          weight_map = {'100.ttf':'200.ttf','500.ttf':'400.ttf','600.ttf':'700.ttf','800.ttf':'700.ttf','900.ttf':'700.ttf'}
+          for family in xr.findall('family'):
+              for node in family.findall('font'):
+                  txt = (node.text or '').strip()
+                  if txt in weight_map:
+                      node.text = weight_map[txt]
+
+          def replace_family(name, specs):
+              fam = next((x for x in xr.findall('family') if x.get('name') == name), None)
+              if fam is None:
+                  fam = ET.Element('family', {'name':name})
+                  xr.insert(0, fam)
+              for child in list(fam):
+                  fam.remove(child)
+              for weight, style, filename in specs:
+                  e = ET.SubElement(fam, 'font', {'weight':str(weight),'style':style})
+                  e.text = filename
+
+          sans_specs = [
+              (100,'normal','SourceSans3-ExtraLight.ttf'),(100,'italic','SourceSans3-ExtraLightIt.ttf'),
+              (200,'normal','SourceSans3-ExtraLight.ttf'),(200,'italic','SourceSans3-ExtraLightIt.ttf'),
+              (300,'normal','SourceSans3-Light.ttf'),(300,'italic','SourceSans3-LightIt.ttf'),
+              (400,'normal','SourceSans3-Regular.ttf'),(400,'italic','SourceSans3-It.ttf'),
+              (500,'normal','SourceSans3-Medium.ttf'),(500,'italic','SourceSans3-MediumIt.ttf'),
+              (600,'normal','SourceSans3-Semibold.ttf'),(600,'italic','SourceSans3-SemiboldIt.ttf'),
+              (700,'normal','SourceSans3-Bold.ttf'),(700,'italic','SourceSans3-BoldIt.ttf'),
+              (800,'normal','SourceSans3-Bold.ttf'),(800,'italic','SourceSans3-BoldIt.ttf'),
+              (900,'normal','SourceSans3-Black.ttf'),(900,'italic','SourceSans3-BlackIt.ttf'),
+          ]
+          replace_family('sans-serif', sans_specs)
+          replace_family('source-sans-pro', sans_specs)
+          replace_family('monospace', [
+              (400,'normal','JetBrainsMono-Regular.ttf'),
+              (400,'italic','JetBrainsMono-Italic.ttf'),
+              (700,'normal','JetBrainsMono-Bold.ttf'),
+              (700,'italic','JetBrainsMono-BoldItalic.ttf'),
+          ])
+
+          math_family = ET.Element('family', {'lang':'und-Zmth'})
+          me = ET.SubElement(math_family, 'font', {'weight':'400','style':'normal'})
+          me.text = math_name
+          xr.append(math_family)
+
+          ET.indent(tree, space='    ')
+          tree.write(xml_path, encoding='utf-8', xml_declaration=True)
+
+          prop = root / 'module.prop'
+          s = prop.read_text(encoding='utf-8', errors='ignore')
+          def field(text, key, value):
+              pat = re.compile(rf'(?m)^{re.escape(key)}=.*$')
+              return pat.sub(f'{key}={value}', text) if pat.search(text) else text + f'\n{key}={value}\n'
+          s = field(s, 'name', 'MFGA (LXGW Main + Source Sans 3 Fast Public)')
+          s = field(s, 'version', '17.0.0-fast-public-20260828')
+          s = field(s, 'versionCode', '1717180028')
+          prop.write_text(s, encoding='utf-8')
+
+          notice = root / 'FAST-PUBLIC-BUILD-NOTICE.md'
+          notice.write_text('''# Fast public build\n\nBuilt entirely from public upstreams in GitHub Actions.\n\n- Base: MFGA SELFUSE 17.0.0.06-27-alpha\n- Main CJK: LXGW WenKai current-main snapshot, commit `50f4b182415a8c33d9a456df220b66a284e2509b`\n- Latin sans: Source Sans 3 3.052R\n- Monospace: JetBrains Mono 2.304\n- Math: IBM Plex Math 1.1.0\n- Plangothic: V2.9.5795 public static build\n- Unicode16: 186 PUA cmap mappings removed to avoid duplicate private-use ownership\n\nThis fast public build intentionally retains the MFGA 17.0.0 public-release Private-UseTest layer; it does not claim byte identity with the separately supplied newer Private-UseTest binary.\n''', encoding='utf-8')
+          PY
+
+      - name: Static QA and package
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from fontTools.ttLib import TTFont
+          import xml.etree.ElementTree as ET, hashlib, json
+
+          root=Path('work/module')
+          ET.parse(root/'fonts.xml')
+          parsed=[]
+          for p in sorted((root/'system/fonts').iterdir()):
+              if p.suffix.lower() in {'.ttf','.otf'}:
+                  TTFont(p, lazy=True, recalcBBoxes=False, recalcTimestamp=False).close()
+                  parsed.append(p.name)
+          required=['200.ttf','300.ttf','400.ttf','700.ttf','SourceSans3-Regular.ttf','JetBrainsMono-Regular.ttf','PlangothicP1.ttf','PlangothicP2.ttf','Unicode16-new.ttf']
+          missing=[x for x in required if not (root/'system/fonts'/x).is_file()]
+          if missing:
+              raise SystemExit(f'Missing required fonts: {missing}')
+          xml=(root/'fonts.xml').read_text(encoding='utf-8')
+          stale=[x for x in ['100.ttf','500.ttf','600.ttf','800.ttf','900.ttf','DroidSansMono.ttf'] if f'>{x}<' in xml]
+          if stale:
+              raise SystemExit(f'Stale custom font references: {stale}')
+          qa={'font_files_parsed':len(parsed),'required_missing':missing,'stale_custom_refs':stale,'xml_parse':True}
+          Path('dist/QA.json').write_text(json.dumps(qa,indent=2)+'\n')
+          PY
+
+          (
+            cd work/module
+            zip -q -r -9 ../../dist/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip .
+          )
+          unzip -t dist/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip > dist/ZIP-TEST.txt
+          sha256sum dist/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip | tee dist/SHA256SUMS.txt
+          du -h dist/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip
+          cat dist/QA.json
+
+      - name: Upload flashable module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MFGA-LXGW-SourceSans3-FastPublic-${{ github.run_number }}
+          path: |
+            dist/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip
+            dist/SHA256SUMS.txt
+            dist/QA.json
+            dist/ZIP-TEST.txt
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
