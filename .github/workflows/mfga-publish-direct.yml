@@ -44,10 +44,11 @@ jobs:
           set -euo pipefail
           TAG='mfga-fast-public-20260828-r1'
           MOD='/tmp/mfga/out/MFGA-LXGW-SourceSans3-FastPublic-20260828.zip'
-          gh release delete "$TAG" --cleanup-tag -y 2>/dev/null || true
+          gh release delete "$TAG" --repo Zhanfg/Zhanfg --cleanup-tag -y 2>/dev/null || true
           gh release create "$TAG" \
             "$MOD" \
             '/tmp/mfga/SHA256SUMS.txt' \
             '/tmp/mfga/ZIP-TEST.txt' \
+            --repo Zhanfg/Zhanfg \
             --title 'MFGA Fast Public 20260828 r1' \
             --notes 'Direct-flash build. Download MFGA-LXGW-SourceSans3-FastPublic-20260828.zip itself; do not wrap or extract/recompress it before flashing. Built by Actions run 33187709092. Static font/XML/ZIP QA passed. Device boot is not yet verified.'
