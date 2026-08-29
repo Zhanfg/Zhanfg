@@ -24,15 +24,19 @@ jobs:
       - name: Clone upstream MFGA
         run: |
           set -euo pipefail
+          rm -rf /tmp/mfga-upstream
           git clone --depth 1 --branch main https://github.com/Numbersf/MakeFontsGreatAgain.git /tmp/mfga-upstream
           git -C /tmp/mfga-upstream rev-parse HEAD > /tmp/upstream-sha
 
       - name: Mirror upstream working tree
         run: |
           set -euo pipefail
+          # GitHub Actions' GITHUB_TOKEN cannot create/update workflow files.
+          # Mirror everything else here; upstream workflows are copied separately
+          # through the GitHub connector after this snapshot succeeds.
           rsync -a --delete \
             --exclude='.git/' \
-            --exclude='.github/workflows/mfga-upstream-sync.yml' \
+            --exclude='.github/workflows/' \
             /tmp/mfga-upstream/ ./
 
           UPSTREAM_SHA="$(cat /tmp/upstream-sha)"
