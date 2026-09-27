@@ -1,10 +1,10 @@
 <h1 align="center">Axymorrsen</h1>
 
 <p align="center">
-  Android/Linux systems · Kernel & root research · TEE/RKP · AI clients & agents · Audio and device tooling
+  Android/Linux systems · Kernel & root · Device trust · AI clients & agents · Build engineering
 </p>
 
-I build practical systems software around Android and Linux, with current work spanning kernel engineering, root infrastructure, trusted execution, mobile AI clients, agent runtimes, audio stacks and system-level tooling.
+I build practical systems software around Android and Linux, with current work spanning kernel engineering, root infrastructure, trusted execution, mobile AI clients, agent runtimes, audio stacks, networking and reproducible build systems.
 
 ## Current focus
 
@@ -12,11 +12,11 @@ I build practical systems software around Android and Linux, with current work s
 - **TEE / device trust** — TEE simulation, Android RKP/StrongBox experiments and device-side trust infrastructure.
 - **AI clients & agents** — mobile-first AI clients, rootless agent runtimes, provider integration, tool execution and persistent environments.
 - **System extensions** — download acceleration, audio processing, lyrics/translation experiments and Android framework tooling.
-- **Engineering workflow** — reproducible CI, upstream tracking, validation-first releases and practical device testing.
+- **Engineering systems** — CI/CD, upstream tracking, source-base maintenance, deployment infrastructure and validation-first releases.
 
-## Active projects
+## Selected projects
 
-| Project | Current direction |
+| Project | Direction |
 | --- | --- |
 | [PatchNest Module](https://github.com/Zhanfg/PatchNest-Module) | KernelPatch/KPM-oriented Android system module and WebUI work |
 | [TEESimulator](https://github.com/Zhanfg/TEESimulator) | TEE simulation and Android trust-stack experiments |
@@ -29,11 +29,15 @@ I build practical systems software around Android and Linux, with current work s
 | [Nova Agent](https://github.com/Zhanfg/nova-agent) | Agent runtime and mobile execution experiments |
 | [Rootless JamesDSP](https://github.com/Zhanfg/RootlessJamesDSP) | Rootless Android audio processing and DSP integration |
 
-## Project space
+## Where things live
 
-Some build systems, hardware prototypes, tooling experiments and supporting infrastructure live under [ZhanfgBuild](https://github.com/ZhanfgBuild).
+| Space | Role |
+| --- | --- |
+| [Zhanfg](https://github.com/Zhanfg) | Maintained products, representative research and user-facing projects |
+| [ZhanfgBuild](https://github.com/ZhanfgBuild) | Build/release infrastructure, source bases, upstream/reference forks and supporting engineering |
+| [axymorrsen.cc](https://axymorrsen.cc) | Project and writing hub |
 
-I keep public repositories focused on reproducible work that can be inspected, built or tested. Experimental branches may move quickly; device-specific claims are treated as provisional until validated on real hardware.
+The repository layout is being reorganized around this boundary. During migration, some canonical repository locations may change while project identity and history remain intact.
 
 ## Working principles
 
