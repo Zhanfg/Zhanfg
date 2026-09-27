@@ -1,33 +1,46 @@
 <h1 align="center">Axymorrsen</h1>
 
 <p align="center">
-  Android kernel · Root tooling · KernelPatch/KPM · System modules
+  Android/Linux systems · Kernel & root research · TEE/RKP · AI clients & agents · Audio and device tooling
 </p>
 
-I build practical Android/Linux system software, with a focus on kernel patching, root infrastructure and system modules.
+I build practical systems software around Android and Linux, with current work spanning kernel engineering, root infrastructure, trusted execution, mobile AI clients, agent runtimes, audio stacks and system-level tooling.
 
-## Featured projects
+## Current focus
 
-| Project | Focus |
+- **Kernel & root** — OnePlus 13 / OnePlus 6 kernels, KernelPatch/KPM, ReSukiSU/SUSFS, congestion control and reproducible build pipelines.
+- **TEE / device trust** — TEE simulation, Android RKP/StrongBox experiments and device-side trust infrastructure.
+- **AI clients & agents** — mobile-first AI clients, rootless agent runtimes, provider integration, tool execution and persistent environments.
+- **System extensions** — download acceleration, audio processing, lyrics/translation experiments and Android framework tooling.
+- **Engineering workflow** — reproducible CI, upstream tracking, validation-first releases and practical device testing.
+
+## Active projects
+
+| Project | Current direction |
 | --- | --- |
-| [TCP Optimiser](https://github.com/Zhanfg/TCP_Optimiser_RS) | Rust-based Magisk/KernelSU module for dynamic TCP congestion control, with a Material Design 3 WebUI |
-| [System Download Accelerator](https://github.com/Zhanfg/SystemDownloadAccelerator) | LSPosed module for segmented Android system downloads and configurable download rules |
-| [PatchNest](https://github.com/Zhanfg/PatchNest) | User-space tooling for Linux kernel patch workflows |
-| [KernelPatch Public](https://github.com/Zhanfg/KernelPatch-Public) | Kernel patching, KPM, SELinux and Android root research |
-| [PatchNest KPM Catalog](https://github.com/Zhanfg/PatchNest-Kpms) | Source and catalog metadata for reusable Kernel Patch Modules |
-| [OnePlus 6 Kernel](https://github.com/Zhanfg/abk-op6-kernel) | ReSukiSU/SUSFS kernel build workflow and reproducible release variants for the OnePlus 6 |
+| [PatchNest Module](https://github.com/Zhanfg/PatchNest-Module) | KernelPatch/KPM-oriented Android system module and WebUI work |
+| [TEESimulator](https://github.com/Zhanfg/TEESimulator) | TEE simulation and Android trust-stack experiments |
+| [Android RKP Bridge](https://github.com/Zhanfg/Android-RKP-Bridge) | RKP / device attestation integration experiments |
+| [OnePlus 13 Kernel](https://github.com/Zhanfg/OnePlus13-kernel) | OnePlus 13 kernel integration, validation and release workflows |
+| [OnePlus 6 Kernel](https://github.com/Zhanfg/abk-op6-kernel) | OnePlus 6 kernel work with ReSukiSU/SUSFS-oriented build variants |
+| [TCP Optimiser](https://github.com/Zhanfg/TCP_Optimiser_RS) | Dynamic TCP tuning, congestion-control work and Android system integration |
+| [System Download Accelerator](https://github.com/Zhanfg/SystemDownloadAccelerator) | Android download-path acceleration and configurable system rules |
+| [Kelivo](https://github.com/Zhanfg/kelivo) | Mobile AI client with chat, story and agent-oriented workflows |
+| [Nova Agent](https://github.com/Zhanfg/nova-agent) | Agent runtime and mobile execution experiments |
+| [Rootless JamesDSP](https://github.com/Zhanfg/RootlessJamesDSP) | Rootless Android audio processing and DSP integration |
 
-## Public and private boundary
+## Project space
 
-- This profile links only to repositories that are intentionally public.
-- Work in progress, research notes and unreleased projects remain private and are not named here.
-- Credentials, device-specific data and internal build material are never part of the public project index.
-- A repository becoming technically usable does not automatically make it ready for public release.
+Some build systems, hardware prototypes, tooling experiments and supporting infrastructure live under [ZhanfgBuild](https://github.com/ZhanfgBuild).
 
-## Working style
+I keep public repositories focused on reproducible work that can be inspected, built or tested. Experimental branches may move quickly; device-specific claims are treated as provisional until validated on real hardware.
 
-- Evidence before claims: distinguish tested results from planned or device-pending work.
-- Small, reviewable changes with clear rollback paths.
-- Documentation and reproducible build workflows are part of the deliverable.
+## Working principles
+
+- Evidence before claims: distinguish verified behavior from planned or device-pending work.
+- Prefer small, reviewable changes with clear rollback paths.
+- Track upstream aggressively, but validate compatibility before integration.
+- Treat documentation, CI and reproducible builds as part of the implementation.
+- Keep credentials, tokens, private device data and unreleased material out of public repositories.
 
 中文交流 / English documentation welcome.
