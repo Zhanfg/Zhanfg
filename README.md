@@ -37,7 +37,7 @@ I build practical systems software around Android and Linux, with current work s
 | [ZhanfgBuild](https://github.com/ZhanfgBuild) | Build/release infrastructure, source bases, upstream/reference forks and supporting engineering |
 | [axymorrsen.cc](https://axymorrsen.cc) | Project and writing hub |
 
-The repository layout is being reorganized around this boundary. During migration, some canonical repository locations may change while project identity and history remain intact.
+This repository boundary is now the maintained layout. A small number of engineering-adjacent repositories intentionally remain under the personal namespace where that better fits their operational or project role.
 
 ## Working principles
 
