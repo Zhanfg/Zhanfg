@@ -11,8 +11,8 @@ android {
         applicationId = "cc.axymorrsen.amtoolnext"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2000001
-        versionName = "2.0.0-alpha1"
+        versionCode = 2000002
+        versionName = "2.0.0-alpha2"
     }
 
     buildTypes {
@@ -57,16 +57,17 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
+    // Modern LSPosed runtime. The target process only uses libxposed API 102.
     compileOnly("io.github.libxposed:api:102.0.0")
-    testImplementation("io.github.libxposed:api:102.0.0")
     implementation("io.github.libxposed:service:102.0.0")
 
-    compileOnly("com.highcapable.yukihookapi:api:1.3.2")
-    compileOnly(platform("com.highcapable.kavaref:kavaref-bom:1.1.0"))
-    compileOnly("com.highcapable.kavaref:kavaref-core")
-    compileOnly("com.highcapable.kavaref:kavaref-extension")
+    // Legacy AMTool compatibility baseline requested by the project. It is deliberately
+    // NOT registered as an Xposed entry; API 102 remains the sole runtime hook engine.
+    implementation("com.highcapable.yukihookapi:api:1.3.2")
+    implementation(platform("com.highcapable.kavaref:kavaref-bom:1.1.0"))
+    implementation("com.highcapable.kavaref:kavaref-core")
+    implementation("com.highcapable.kavaref:kavaref-extension")
 
+    // Kept for semantic fallback discovery when Apple Music changes obfuscation.
     implementation("org.luckypray:dexkit:2.2.0")
-
-    testImplementation("junit:junit:4.13.2")
 }
