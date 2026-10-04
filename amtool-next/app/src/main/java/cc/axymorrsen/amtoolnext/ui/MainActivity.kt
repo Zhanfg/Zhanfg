@@ -58,9 +58,9 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599)", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · alpha3", style = MaterialTheme.typography.titleMedium)
             Text(
-                "保留 Türkiye 账号、订阅和播放授权；目录与歌词内容请求使用支持简中本地化的内容镜像。设置通过 LSPosed API 102 热重载。",
+                "保留 Türkiye 账号、订阅与播放授权。歌词始终走账号真实 storefront；歌曲/专辑展示信息改从中国大陆目录请求简体中文。",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(18.dp))
@@ -68,23 +68,23 @@ private fun SettingsScreen() {
             ToggleRow("启用模块", "总开关", config.enabled) {
                 update { it.copy(enabled = !it.enabled) }
             }
-            ToggleRow("中文原歌词优先", "优先请求 zh-Hans / zh-Hans-CN / zh-CN", config.chineseLyrics) {
+            ToggleRow("中文原歌词优先", "请求 zh-Hans-CN / zh-Hans / zh-CN", config.chineseLyrics) {
                 update { it.copy(chineseLyrics = !it.chineseLyrics) }
             }
-            ToggleRow("自动显示官方翻译", "有 Apple 官方中文翻译时优先启用", config.autoTranslation) {
+            ToggleRow("自动显示官方翻译", "修正 Apple 的 zh-Hans ↔ zh-Hans-CN 可用性判断", config.autoTranslation) {
                 update { it.copy(autoTranslation = !it.autoTranslation) }
             }
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "US 内容目录请求 zh-Hans；无中文时由 Apple 回退英文", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "中国大陆 catalog + zh-Hans-CN；无本地化名时保留 Apple 返回的原名", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
 
             Spacer(Modifier.height(20.dp))
-            Text("当前配置修订：${config.revision}", style = MaterialTheme.typography.labelMedium)
+            Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "不会修改账号地区、DSID、订阅资格或播放 URL；只重写展示/歌词内容请求的 storefront。",
+                "不会修改账号地区、DSID、订阅资格或播放 URL。alpha3 同时覆盖 6.5.3 的 repository executor 与 amp-api 最终网络层。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
