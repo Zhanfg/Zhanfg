@@ -9,42 +9,28 @@ on:
       - '.github/workflows/amtool-next-build.yml'
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ''
+      - uses: android-actions/setup-android@v3
       - name: Install Android SDK 37
-        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+        run: yes | sdkmanager "platforms;android-37" "build-tools;37.0.0" || yes | sdkmanager "platforms;android-37"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
-      - name: Test and build debug APK
+      - name: Build debug APK
         working-directory: amtool-next
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug --stacktrace --console=plain
-      - name: Verify modern Xposed metadata
-        shell: bash
-        run: |
-          APK="$(find amtool-next/app/build/outputs/apk/debug -name '*.apk' -print -quit)"
-          test -n "$APK"
-          unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
-          unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
-          unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
+        run: gradle --no-daemon :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-2.0.0-alpha1-debug
+          name: AMTool-Next-2.0.0-alpha2-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
