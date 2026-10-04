@@ -69,5 +69,5 @@ dependencies {
     implementation("com.highcapable.kavaref:kavaref-extension")
 
     // Kept for semantic fallback discovery when Apple Music changes obfuscation.
-    implementation("org.luckypray:dexkit:2.2.0")
+    implementation("org.luckypray:dexkit:2.2.0")\n\n    testImplementation("junit:junit:4.13.2")
 }
