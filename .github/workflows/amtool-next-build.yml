@@ -1,0 +1,36 @@
+name: AMTool Next Build
+
+on:
+  push:
+    branches:
+      - 'project/amtool-next-v2'
+    paths:
+      - 'amtool-next/**'
+      - '.github/workflows/amtool-next-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 37
+        run: yes | sdkmanager "platforms;android-37" "build-tools;37.0.0" || yes | sdkmanager "platforms;android-37"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.1'
+      - name: Build debug APK
+        working-directory: amtool-next
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMTool-Next-2.0.0-alpha1-debug
+          path: amtool-next/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
