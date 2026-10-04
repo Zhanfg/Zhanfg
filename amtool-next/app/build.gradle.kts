@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "cc.axymorrsen.amtoolnext"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cc.axymorrsen.amtoolnext"
         minSdk = 30
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 2000001
         versionName = "2.0.0-alpha1"
     }
