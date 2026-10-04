@@ -58,6 +58,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     compileOnly("io.github.libxposed:api:102.0.0")
+    testImplementation("io.github.libxposed:api:102.0.0")
     implementation("io.github.libxposed:service:102.0.0")
 
     implementation("com.highcapable.yukihookapi:api:1.3.2")
@@ -66,4 +67,6 @@ dependencies {
     implementation("com.highcapable.kavaref:kavaref-extension")
 
     implementation("org.luckypray:dexkit:2.2.0")
+
+    testImplementation("junit:junit:4.13.2")
 }
