@@ -1,7 +1,11 @@
 package cc.axymorrsen.amtoolnext.hook
 
 internal object LanguagePolicy {
-    private val simplifiedChinese = listOf("zh-Hans-CN", "zh-Hans", "zh-CN")
+    /** US storefront supports Simplified Chinese localization while retaining broad catalog coverage. */
+    const val CONTENT_STOREFRONT = "us"
+    const val CONTENT_LANGUAGE = "zh-Hans"
+
+    private val simplifiedChinese = listOf("zh-Hans", "zh-Hans-CN", "zh-CN")
     private val pronunciation = listOf("zh-Latn", "ja-Latn", "ko-Latn")
 
     fun translations(original: Array<*>?, enabled: Boolean): Array<String> {
