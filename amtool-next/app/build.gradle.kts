@@ -61,10 +61,10 @@ dependencies {
     testImplementation("io.github.libxposed:api:102.0.0")
     implementation("io.github.libxposed:service:102.0.0")
 
-    implementation("com.highcapable.yukihookapi:api:1.3.2")
-    implementation(platform("com.highcapable.kavaref:kavaref-bom:1.1.0"))
-    implementation("com.highcapable.kavaref:kavaref-core")
-    implementation("com.highcapable.kavaref:kavaref-extension")
+    compileOnly("com.highcapable.yukihookapi:api:1.3.2")
+    compileOnly(platform("com.highcapable.kavaref:kavaref-bom:1.1.0"))
+    compileOnly("com.highcapable.kavaref:kavaref-core")
+    compileOnly("com.highcapable.kavaref:kavaref-extension")
 
     implementation("org.luckypray:dexkit:2.2.0")
 
