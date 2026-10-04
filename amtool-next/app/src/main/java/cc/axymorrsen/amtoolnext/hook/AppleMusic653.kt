@@ -4,11 +4,13 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import java.util.LinkedHashMap
 
-/** Exact symbols verified against Apple Music 6.5.3 (1599). */
+/** Exact symbols verified against Apple Music Android 6.5.3 (1599). */
 internal object AppleMusic653 {
     const val PACKAGE = "com.apple.android.music"
     const val LYRICS_LANGUAGE_REQUEST =
         "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel\$f"
+    const val LYRICS_VIEW_MODEL =
+        "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel"
     const val APP_SHARED_PREFERENCES = "com.apple.android.music.utils.AppSharedPreferences"
     const val MEDIA_API_LOCALIZATION = "u8.E"
 
@@ -16,6 +18,13 @@ internal object AppleMusic653 {
         val type = loader.loadClass(LYRICS_LANGUAGE_REQUEST)
         return type.declaredConstructors.single { ctor ->
             ctor.parameterTypes.count { it == Array<String>::class.java } == 2
+        }.apply { isAccessible = true }
+    }
+
+    fun lyricsLoadMethod(loader: ClassLoader): Method {
+        val type = loader.loadClass(LYRICS_VIEW_MODEL)
+        return type.declaredMethods.single { method ->
+            method.name == "loadLyrics" && method.parameterCount == 1
         }.apply { isAccessible = true }
     }
 
