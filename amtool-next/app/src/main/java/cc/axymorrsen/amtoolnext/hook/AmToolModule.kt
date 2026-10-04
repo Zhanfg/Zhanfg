@@ -25,6 +25,9 @@ class AmToolModule : XposedModule() {
                 val next = ConfigCodec.read(changed)
                 if (HookConfigRuntime.update(next)) {
                     log(Log.INFO, TAG, "hot reload revision=${next.revision}")
+                    LyricsHotReload.requestRefresh { message ->
+                        log(Log.INFO, TAG, message)
+                    }
                 }
             }
             preferenceListener = listener
@@ -39,9 +42,26 @@ class AmToolModule : XposedModule() {
         if (param.packageName != AppleMusic653.PACKAGE || !param.isFirstPackage) return
         if (!installed.compareAndSet(false, true)) return
         val loader = param.classLoader
+        installLyricsReloadCapture(loader)
         installLyricsLanguageHook(loader)
         installMetadataLanguageHook(loader)
         installTranslationPreferenceGuard(loader)
+    }
+
+    private fun installLyricsReloadCapture(loader: ClassLoader) {
+        runCatching {
+            val method = AppleMusic653.lyricsLoadMethod(loader)
+            LyricsHotReload.bind(method)
+            hook(method)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept { chain ->
+                    LyricsHotReload.capture(chain.thisObject, chain.args.toTypedArray())
+                    chain.proceed()
+                }
+            log(Log.INFO, TAG, "lyrics hot-reload capture installed")
+        }.onFailure {
+            log(Log.ERROR, TAG, "lyrics hot-reload capture failed", it)
+        }
     }
 
     private fun installLyricsLanguageHook(loader: ClassLoader) {
