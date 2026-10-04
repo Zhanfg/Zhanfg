@@ -7,10 +7,13 @@ on:
       - 'amtool-next/**'
       - '.github/workflows/amtool-next-pr-build.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -21,16 +24,22 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           packages: ''
-      - name: Install Android 17 preview SDK
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --channel=3 "platforms;android-37.0" "build-tools;37.0.0"
+      - name: Install Android SDK 37
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
-      - name: Build debug APK
+      - name: Test and build debug APK
         working-directory: amtool-next
-        run: gradle --no-daemon :app:assembleDebug
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug --stacktrace --console=plain
+      - name: Verify modern Xposed metadata
+        shell: bash
+        run: |
+          APK="$(find amtool-next/app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
+          unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
+          unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
