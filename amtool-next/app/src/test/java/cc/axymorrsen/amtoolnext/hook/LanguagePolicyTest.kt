@@ -1,6 +1,8 @@
 package cc.axymorrsen.amtoolnext.hook
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LanguagePolicyTest {
@@ -28,6 +30,27 @@ class LanguagePolicyTest {
         assertArrayEquals(
             arrayOf("zh-Latn", "ja-Latn", "ko-Latn", "tr-Latn"),
             actual,
+        )
+    }
+
+    @Test
+    fun regionQualifiedOfficialTranslationIsSelectedForSystemChinese() {
+        assertEquals(
+            "zh-Hans-CN",
+            LanguagePolicy.selectAvailableTranslation(
+                requestedLanguage = "zh-Hans",
+                availableLanguages = listOf("zh-Hans-CN"),
+            ),
+        )
+    }
+
+    @Test
+    fun unrelatedTranslationLanguageIsNotSelected() {
+        assertNull(
+            LanguagePolicy.selectAvailableTranslation(
+                requestedLanguage = "zh-Hans",
+                availableLanguages = listOf("ja-JP", "ko-KR"),
+            )
         )
     }
 }
