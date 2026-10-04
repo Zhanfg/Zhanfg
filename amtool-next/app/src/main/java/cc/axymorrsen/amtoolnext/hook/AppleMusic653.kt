@@ -61,7 +61,7 @@ internal object AppleMusic653 {
                 method.parameterCount == 7 &&
                 method.parameterTypes.getOrNull(3) == String::class.java &&
                 method.parameterTypes.getOrNull(4) == String::class.java &&
-                Map::class.java.isAssignableFrom(method.parameterTypes.getOrNull(5))
+                Map::class.java.isAssignableFrom(method.parameterTypes[5])
         }.apply { isAccessible = true }
 
     fun translationSetter(loader: ClassLoader): Method? = runCatching {
