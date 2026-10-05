@@ -31,12 +31,12 @@ jobs:
       - name: Upload AMTool APK
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-2.0.0-alpha3-hotfix5-debug
+          name: AMTool-Next-2.0.0-alpha3-hotfix6-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - name: Upload provider compatibility helper
         uses: actions/upload-artifact@v4
         with:
-          name: Apple-Provider-AMTool-Compat-Helper
+          name: Apple-Provider-AMTool-Compat-Hotfix2
           path: amtool-next/provider-compat-injector/build/outputs/apk/debug/*.apk
           if-no-files-found: error
