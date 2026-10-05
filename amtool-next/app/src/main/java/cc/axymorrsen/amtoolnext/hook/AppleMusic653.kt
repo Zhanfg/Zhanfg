@@ -1,6 +1,7 @@
 package cc.axymorrsen.amtoolnext.hook
 
 import java.lang.reflect.Constructor
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
@@ -22,6 +23,10 @@ internal object AppleMusic653 {
         "com.apple.android.music.utils.AppSharedPreferences"
     const val MEDIA_API_REPOSITORY_HOLDER =
         "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder"
+    const val MEDIA_ENTITY = "com.apple.android.music.mediaapi.models.MediaEntity"
+    const val ARTIST_BASE_CONTROLLER =
+        "com.apple.android.music.profiles.BaseProfileEpoxyController"
+    const val ARTIST_TOP_SONG_MODEL = "com.apple.android.music.e1"
 
     private val CONTENT_ITEM_CLASSES = listOf(
         "com.apple.android.music.model.BaseContentItem",
@@ -144,6 +149,70 @@ internal object AppleMusic653 {
     fun contentItemNotifyChange(type: Class<*>): Method? =
         findMethod(type, "notifyChange", 0)
 
+    data class ArtistTopSongSurface(
+        val buildMethod: Method,
+        val bindMethod: Method,
+        val titleField: Field,
+    )
+
+    /**
+     * 6.5.3 artist Top Songs do not consume BaseContentItem#getTitle at render time.
+     * BaseProfileEpoxyController materializes an e1 Epoxy model and e1#a binds its L field.
+     */
+    fun artistTopSongSurface(loader: ClassLoader): ArtistTopSongSurface {
+        val mediaEntity = loader.loadClass(MEDIA_ENTITY)
+        val controller = loader.loadClass(ARTIST_BASE_CONTROLLER)
+        val model = loader.loadClass(ARTIST_TOP_SONG_MODEL)
+
+        val build = controller.declaredMethods.single { method ->
+            method.name == "addSwipingChartItemA2" &&
+                method.parameterCount == 6 &&
+                method.parameterTypes[0] == String::class.java &&
+                method.parameterTypes[1] == mediaEntity &&
+                method.parameterTypes[2] == Int::class.javaPrimitiveType &&
+                method.parameterTypes[3] == Int::class.javaPrimitiveType &&
+                method.parameterTypes[4] == String::class.java &&
+                method.parameterTypes[5] == Int::class.javaPrimitiveType
+        }.apply { isAccessible = true }
+
+        val bind = findMethod(model, "a", 2) { method ->
+            method.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                method.parameterTypes[1] == Any::class.java &&
+                method.returnType == Void.TYPE
+        } ?: error("Artist Top Songs model binder e1#a unavailable")
+
+        val title = findField(model, "L")
+            ?.takeIf { it.type == String::class.java }
+            ?: error("Artist Top Songs title field e1#L unavailable")
+        title.isAccessible = true
+
+        return ArtistTopSongSurface(build, bind, title)
+    }
+
+    fun mediaEntityCatalogId(entity: Any): String? {
+        val candidates = sequenceOf(
+            "getId",
+            "getSubscriptionStoreId",
+            "getAssetAdamId",
+            "getReportingAdamId",
+        )
+        candidates.forEach { name ->
+            val method = findMethod(entity.javaClass, name, 0) ?: return@forEach
+            val value = runCatching { method.invoke(entity)?.toString()?.trim() }.getOrNull()
+            if (!value.isNullOrEmpty() && value.all(Char::isDigit)) return value
+        }
+
+        val attributes = findMethod(entity.javaClass, "getAttributes", 0)
+            ?.let { runCatching { it.invoke(entity) }.getOrNull() }
+            ?: return null
+        val playParams = findMethod(attributes.javaClass, "getPlayParams", 0)
+            ?.let { runCatching { it.invoke(attributes) }.getOrNull() }
+            ?: return null
+        val catalogId = findMethod(playParams.javaClass, "getCatalogId", 0)
+            ?.let { runCatching { it.invoke(playParams)?.toString()?.trim() }.getOrNull() }
+        return catalogId?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+    }
+
     fun mediaApiAccess(loader: ClassLoader): MediaApiAccess {
         val holder = loader.loadClass(MEDIA_API_REPOSITORY_HOLDER)
         val companionField = holder.declaredFields.firstOrNull { field ->
@@ -163,6 +232,18 @@ internal object AppleMusic653 {
                 method.returnType == Any::class.java
         } ?: error("MediaApi#v(String,Map,Continuation) unavailable")
         return MediaApiAccess(mediaApi, direct)
+    }
+
+    private fun findField(type: Class<*>, name: String): Field? {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredFields.firstOrNull { it.name == name }?.let { field ->
+                field.isAccessible = true
+                return field
+            }
+            current = current.superclass
+        }
+        return null
     }
 
     private fun findMethod(
