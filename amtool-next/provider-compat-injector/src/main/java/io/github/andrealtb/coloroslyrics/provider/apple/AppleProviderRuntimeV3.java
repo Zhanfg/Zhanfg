@@ -18,7 +18,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -122,13 +121,6 @@ final class AppleProviderRuntimeV3 {
     private int emptyTaskProbeCount;
 
     private final WeakHashMap<MediaSession, SessionState> sessions = new WeakHashMap<>();
-    private final LinkedHashMap<String, Object> playbackItems =
-            new LinkedHashMap<String, Object>(24, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Object> eldest) {
-                    return size() > 32;
-                }
-            };
 
     private Object generationPolicy;
     private Method generationObserve;
@@ -162,7 +154,6 @@ final class AppleProviderRuntimeV3 {
         resolveProviderPrimitives();
         installSessionHooks();
         installHostTaskLifecycleHooks();
-        installPlaybackDiscoveryHooks();
         installLyricsHooks();
         module.log(Log.INFO, TAG, "provider runtime v3 alpha7 host-observer installed");
     }
@@ -530,34 +521,6 @@ final class AppleProviderRuntimeV3 {
         }
     }
 
-    private void installPlaybackDiscoveryHooks() {
-        for (String className : new String[] {
-                "com.apple.android.music.player.N",
-                "com.apple.android.music.player.M"
-        }) {
-            try {
-                Class<?> type = hostLoader.loadClass(className);
-                for (Method method : type.getDeclaredMethods()) {
-                    if (!Modifier.isStatic(method.getModifiers()) ||
-                            method.getParameterCount() != 1 ||
-                            !method.getReturnType().getName().equals(
-                                    "com.apple.android.music.model.PlaybackItem")) {
-                        continue;
-                    }
-                    method.setAccessible(true);
-                    module.hook(method)
-                            .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                            .intercept(chain -> {
-                                Object result = chain.proceed();
-                                cachePlaybackItem(result);
-                                return result;
-                            });
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     private void installLyricsHooks() throws Exception {
         Class<?> viewModel = hostLoader.loadClass(
                 "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel");
@@ -581,7 +544,6 @@ final class AppleProviderRuntimeV3 {
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept(chain -> {
                     Object item = chain.getArg(0);
-                    cachePlaybackItem(item);
                     CanonicalTrack track = trackFromPlaybackItem(item);
                     if (track != null) {
                         transitionTo(track, "host-loadLyrics", false);
@@ -684,16 +646,6 @@ final class AppleProviderRuntimeV3 {
             if (!hostTaskPresent || current == null) return;
             lyricGate.markHostRequestInFlight();
         }
-    }
-
-    private void cachePlaybackItem(Object item) {
-        CanonicalTrack track = trackFromPlaybackItem(item);
-        if (item == null || track == null || empty(track.id)) return;
-        synchronized (lock) {
-            playbackItems.put(track.id, item);
-        }
-        // Cache only. Synthetic PlayerLyricsViewModel construction/requesting was removed in
-        // alpha7 because it can cause Apple Music to rebind the player and restart playback.
     }
 
     private void onLyricsBuilt(Object songNative) {
