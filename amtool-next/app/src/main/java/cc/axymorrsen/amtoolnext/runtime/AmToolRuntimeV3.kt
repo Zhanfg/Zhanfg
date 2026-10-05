@@ -43,7 +43,6 @@ internal class AmToolRuntimeV3(
 
         FloatingBottomBarRuntime(
             module = module,
-            loader = loader,
             logger = logger,
         ).install()
 
