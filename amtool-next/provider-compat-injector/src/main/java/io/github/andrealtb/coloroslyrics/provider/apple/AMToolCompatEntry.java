@@ -30,6 +30,11 @@ public final class AMToolCompatEntry extends XposedModule {
         } catch (Throwable t) {
             log(Log.ERROR, TAG, "translation alias compatibility hook failed", t);
         }
+        try {
+            new TrackTransitionLyricGuard().install(this);
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "track transition lyric guard failed", t);
+        }
     }
 
     /**
