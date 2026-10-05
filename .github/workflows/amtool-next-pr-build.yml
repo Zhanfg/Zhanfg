@@ -31,7 +31,7 @@ jobs:
           gradle-version: '9.7.1'
       - name: Test and build V3
         working-directory: amtool-next
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:assembleDebug --stacktrace --console=plain
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:testDebugUnitTest :provider-compat-injector:assembleDebug --stacktrace --console=plain
       - name: Verify AMTool Xposed API 102 metadata
         shell: bash
         run: |
