@@ -56,12 +56,13 @@ class AmToolModule : XposedModule() {
         installSongInfoTranslationCompatibility(loader)
         installLyricsRequestObservationHook(loader)
 
-        installCatalogRequestLocalizationHooks(loader)
-        installAmpApiLocalizationHook(loader)
-        installMetadataLanguageHook(loader)
+        // Playback safety: never rewrite Apple Music's native catalog/editorial requests.
+        // Chinese metadata will be reintroduced through a side-channel lookup + model overlay,
+        // not by changing the storefront of the objects that carry playParams.
+        log(Log.INFO, TAG, "native metadata storefront rewrite disabled for playback safety")
 
         installTranslationPreferenceGuard(loader)
-        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3 hooks installed")
+        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3-hotfix2 hooks installed")
     }
 
     private fun installLyricsLanguageHook(loader: ClassLoader) {
