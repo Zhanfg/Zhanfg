@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha2", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha3", style = MaterialTheme.typography.titleMedium)
             Text(
                 "V3 将播放、歌词、中文 metadata 三条链彻底拆开：账号与播放始终保持 Türkiye；中文 metadata 只走模块自有请求；歌词只控制语言与展示。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -77,17 +77,17 @@ private fun SettingsScreen() {
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "土区 ID → ISRC → CN 对应录音；alpha2 直接覆盖 6.5.3 Artist Top Songs 的 Epoxy 显示模型", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "优先按同一 catalog ID 批量请求 CN/zh-CN，缺失时才回退 ISRC；直接覆盖 6.5.3 Artist Top Songs 显示模型", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
-            ToggleRow("悬浮底栏", "导航栏与迷你播放器改为悬浮圆角卡片；不改变 Apple 原生手势、peek 高度与播放布局", config.floatingBottomBar) {
+            ToggleRow("悬浮底栏", "将原生迷你播放器+导航合成一个悬浮圆角底栏；去掉外层色块，不再双卡重叠，也不做焦点热循环", config.floatingBottomBar) {
                 update { it.copy(floatingBottomBar = !it.floatingBottomBar) }
             }
 
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "3.0.0-alpha2：在 V3 隔离架构上补齐真实 Artist Top Songs 消费层，并新增悬浮底栏。中文请求仍只在私有 token 的旁路请求上切 CN；原生 Türkiye 播放链完全不改。",
+                "3.0.0-alpha3：中文 metadata 改为 20ms 合批、同 ID 直查 CN，ISRC 仅作缺失回退；Artist 页模型重建做帧级合并。悬浮底栏改成单一几何容器，移除 focus 重扫与双层 elevation。Türkiye 播放链仍完全不改。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
