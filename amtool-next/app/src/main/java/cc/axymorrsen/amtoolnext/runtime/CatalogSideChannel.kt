@@ -9,6 +9,7 @@ import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Proxy
 import java.util.LinkedHashMap
 import java.util.LinkedHashSet
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -16,18 +17,14 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * Playback-safe localized catalog client for Apple Music 6.5.3.
  *
- * alpha3 fixes two alpha1/alpha2 mistakes:
- * 1. do not resolve every visible row with its own account+ISRC pair of requests;
- * 2. do not assume the CN entity must be found by ISRC.
+ * Requests are module-owned and batched. The resolution ladder is:
  *
- * Visible IDs are coalesced for 36 ms. One account batch captures all stable identity aliases
- * (id/subscriptionStoreId/assetAdamId/reportingAdamId/formerIds/playParams.catalogId), then one
- * tokenized CN batch tries those IDs directly. ISRC is only the final fallback.
+ * 1. same account storefront + zh-CN (keeps the original catalog identity);
+ * 2. CN storefront using every stable Adam-ID alias carried by the entity;
+ * 3. CN storefront by ISRC.
  *
- * A localized direct query temporarily seeds MediaApi.s because u8.E.v reads it during coroutine
- * setup. The exact v8.D/A5.l/Ic.n executor hook remains the authority: token requests are forced
- * to CN and the token is stripped; any concurrent native request observed during that tiny setup
- * window is pinned back to the captured account storefront.
+ * This matters because some Apple entities expose translated metadata through the language
+ * parameter without changing storefront, while others are separate CN catalog entities.
  */
 internal class CatalogSideChannel(
     private val module: XposedModule,
@@ -60,6 +57,8 @@ internal class CatalogSideChannel(
     private val pending = LinkedHashMap<String, Pending>()
     private var flushScheduled = false
 
+    private val requestStorefronts = ConcurrentHashMap<String, String>()
+
     @Volatile
     private var accountStorefront: String? = null
 
@@ -75,14 +74,14 @@ internal class CatalogSideChannel(
 
         logger(
             Log.INFO,
-            "catalog side-channel alpha3 installed executors=${methods.size} " +
+            "catalog side-channel installed executors=${methods.size} " +
                 "accountStorefront=${accountStorefront ?: "unknown"}",
             null,
         )
     }
 
     fun resolve(mediaId: String, callback: (Alias?) -> Unit) =
-        resolve(mediaId, null, callback)
+        resolve(mediaId, isrcHint = null, callback = callback)
 
     fun resolve(
         mediaId: String,
@@ -106,9 +105,7 @@ internal class CatalogSideChannel(
                 schedule = true
             }
         }
-        if (schedule) {
-            main.postDelayed(::flush, BATCH_DELAY_MS)
-        }
+        if (schedule) main.postDelayed(::flush, BATCH_DELAY_MS)
     }
 
     private fun flush() {
@@ -123,76 +120,60 @@ internal class CatalogSideChannel(
 
         if (batch.isEmpty()) return
         if (flushScheduled) main.postDelayed(::flush, BATCH_DELAY_MS)
-
         resolveBatch(batch)
     }
 
     private fun resolveBatch(batch: Map<String, Pending>) {
-        val hinted = batch.filterValues { !it.isrcHint.isNullOrBlank() }
-        if (hinted.isEmpty()) {
-            resolveBatchByAccount(batch)
-            return
-        }
-
-        val fallback = LinkedHashMap<String, Pending>()
-        batch.forEach { (id, request) ->
-            if (request.isrcHint.isNullOrBlank()) fallback[id] = request
-        }
-
-        val remaining = AtomicInteger(hinted.size)
-        hinted.forEach { (requestedId, request) ->
-            val isrc = request.isrcHint!!
-            query(
-                path = "songs",
-                query = linkedMapOf(
-                    "filter[isrc]" to isrc,
-                    "l" to LANGUAGE,
-                    "platform" to "android",
-                    "include[songs]" to "artists",
-                    "limit" to "1",
-                ),
-                localized = true,
-            ) { response ->
-                val alias = parseEntities(response)
-                    .firstOrNull { it.alias?.hasValue() == true }
-                    ?.alias
-
-                if (alias != null) {
-                    finishBatch(mapOf(requestedId to request), mapOf(requestedId to alias))
-                } else {
-                    synchronized(fallback) {
-                        fallback[requestedId] = request
-                    }
-                }
-
-                if (remaining.decrementAndGet() == 0) {
-                    val pendingFallback = synchronized(fallback) { LinkedHashMap(fallback) }
-                    if (pendingFallback.isNotEmpty()) {
-                        resolveBatchByAccount(pendingFallback)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun resolveBatchByAccount(batch: Map<String, Pending>) {
         val requestedIds = batch.keys.toList()
+        val accountTarget = accountStorefront
 
         query(
             path = "songs",
             query = linkedMapOf(
                 "ids" to requestedIds.joinToString(","),
+                "l" to LANGUAGE,
                 "platform" to "android",
                 "include[songs]" to "artists",
             ),
-            localized = false,
+            targetStorefront = accountTarget,
         ) { accountResponse ->
             val accountEntities = parseEntities(accountResponse)
             val identityByRequested = requestedIds.associateWith { requestedId ->
-                accountEntities.firstOrNull { requestedId in it.ids }
+                val entity = accountEntities.firstOrNull { requestedId in it.ids }
+                val hint = batch[requestedId]?.isrcHint
+                when {
+                    entity == null && hint != null -> EntitySnapshot(
+                        ids = setOf(requestedId),
+                        isrc = hint,
+                        alias = null,
+                    )
+                    entity != null && entity.isrc == null && hint != null ->
+                        entity.copy(isrc = hint)
+                    else -> entity
+                }
             }
 
-            val lookupIdsByRequested = requestedIds.associateWith { requestedId ->
+            val resolved = LinkedHashMap<String, Alias>()
+            val fallbacks = LinkedHashMap<String, Alias>()
+            val unresolved = mutableListOf<String>()
+
+            requestedIds.forEach { requestedId ->
+                val alias = identityByRequested[requestedId]?.alias
+                when {
+                    alias?.hasChineseTitle() == true -> resolved[requestedId] = alias
+                    else -> {
+                        if (alias?.hasValue() == true) fallbacks[requestedId] = alias
+                        unresolved += requestedId
+                    }
+                }
+            }
+
+            if (unresolved.isEmpty()) {
+                finishBatch(batch, resolved)
+                return@query
+            }
+
+            val lookupIdsByRequested = unresolved.associateWith { requestedId ->
                 LinkedHashSet<String>().apply {
                     add(requestedId)
                     identityByRequested[requestedId]?.ids?.let(::addAll)
@@ -204,7 +185,14 @@ internal class CatalogSideChannel(
                 .take(MAX_LOOKUP_IDS)
 
             if (allLookupIds.isEmpty()) {
-                finishBatch(batch, emptyMap())
+                resolveByIsrcFallback(
+                    unresolved = unresolved,
+                    identityByRequested = identityByRequested,
+                    resolved = resolved,
+                    fallbacks = fallbacks,
+                ) { completed ->
+                    finishBatch(batch, completed)
+                }
                 return@query
             }
 
@@ -216,34 +204,36 @@ internal class CatalogSideChannel(
                     "platform" to "android",
                     "include[songs]" to "artists",
                 ),
-                localized = true,
+                targetStorefront = CN_STOREFRONT,
             ) { localizedResponse ->
                 val localizedEntities = parseEntities(localizedResponse)
-                val resolved = LinkedHashMap<String, Alias>()
-                val unresolved = mutableListOf<String>()
+                val stillUnresolved = mutableListOf<String>()
 
-                requestedIds.forEach { requestedId ->
+                unresolved.forEach { requestedId ->
                     val lookupIds = lookupIdsByRequested[requestedId].orEmpty().toSet()
                     val direct = localizedEntities.firstOrNull { entity ->
                         entity.alias != null && entity.ids.any(lookupIds::contains)
                     }?.alias
 
-                    if (direct != null && direct.hasValue()) {
-                        resolved[requestedId] = direct
-                    } else {
-                        unresolved += requestedId
+                    when {
+                        direct?.hasChineseTitle() == true -> resolved[requestedId] = direct
+                        else -> {
+                            if (direct?.hasValue() == true) fallbacks[requestedId] = direct
+                            stillUnresolved += requestedId
+                        }
                     }
                 }
 
-                if (unresolved.isEmpty()) {
+                if (stillUnresolved.isEmpty()) {
                     finishBatch(batch, resolved)
                     return@query
                 }
 
                 resolveByIsrcFallback(
-                    unresolved = unresolved,
+                    unresolved = stillUnresolved,
                     identityByRequested = identityByRequested,
                     resolved = resolved,
+                    fallbacks = fallbacks,
                 ) { completed ->
                     finishBatch(batch, completed)
                 }
@@ -253,18 +243,24 @@ internal class CatalogSideChannel(
 
     private fun resolveByIsrcFallback(
         unresolved: List<String>,
-        batch: Map<String, Pending>,
         identityByRequested: Map<String, EntitySnapshot?>,
         resolved: LinkedHashMap<String, Alias>,
+        fallbacks: Map<String, Alias>,
         onDone: (Map<String, Alias>) -> Unit,
     ) {
         val candidates = unresolved.mapNotNull { id ->
-            val isrc = batch[id]?.isrcHint ?: identityByRequested[id]?.isrc
-            isrc?.let { id to it }
+            identityByRequested[id]?.isrc?.let { id to it }
         }
+
         if (candidates.isEmpty()) {
+            unresolved.forEach { id -> fallbacks[id]?.let { resolved[id] = it } }
             onDone(resolved)
             return
+        }
+
+        val candidateIds = candidates.mapTo(HashSet()) { it.first }
+        unresolved.filterNot(candidateIds::contains).forEach { id ->
+            fallbacks[id]?.let { resolved[id] = it }
         }
 
         val remaining = AtomicInteger(candidates.size)
@@ -278,16 +274,19 @@ internal class CatalogSideChannel(
                     "include[songs]" to "artists",
                     "limit" to "1",
                 ),
-                localized = true,
+                targetStorefront = CN_STOREFRONT,
             ) { response ->
-                parseEntities(response)
+                val alias = parseEntities(response)
                     .firstOrNull { it.alias?.hasValue() == true }
                     ?.alias
-                    ?.let { resolved[requestedId] = it }
 
-                if (remaining.decrementAndGet() == 0) {
-                    onDone(resolved)
+                when {
+                    alias?.hasChineseTitle() == true -> resolved[requestedId] = alias
+                    alias?.hasValue() == true -> resolved[requestedId] = alias
+                    else -> fallbacks[requestedId]?.let { resolved[requestedId] = it }
                 }
+
+                if (remaining.decrementAndGet() == 0) onDone(resolved)
             }
         }
     }
@@ -303,7 +302,8 @@ internal class CatalogSideChannel(
             } else {
                 logger(
                     Log.INFO,
-                    "localized metadata hit id=$id title=${alias.title}",
+                    "localized metadata hit id=$id chinese=${alias.hasChineseTitle()} " +
+                        "title=${alias.title}",
                     null,
                 )
             }
@@ -319,26 +319,26 @@ internal class CatalogSideChannel(
                 val original = chain.args.getOrNull(target.queryIndex) as? Map<Any?, Any?>
                     ?: return@intercept chain.proceed()
 
-                if (original.containsKey(TOKEN)) {
+                val token = original[TOKEN]?.toString()
+                if (token != null) {
                     val args = chain.args.toTypedArray()
                     val query = LinkedHashMap<Any?, Any?>()
                     query.putAll(original)
                     query.remove(TOKEN)
                     query["l"] = LANGUAGE
                     args[target.queryIndex] = query
-                    args[3] = STOREFRONT
+                    requestStorefronts[token]?.let { args[3] = it }
                     return@intercept chain.proceed(args)
                 }
 
-                // During the synchronous setup window MediaApi.s is temporarily CN. If Apple
-                // happens to start an unrelated native request on another thread in that window,
-                // keep that request on the real account storefront.
+                // MediaApi.s is only seeded for the synchronous setup of our own request.
+                // An unrelated native request that races that tiny window stays on the real
+                // account storefront.
                 val account = accountStorefront
                 if (
                     setupLocalizedCalls.get() > 0 &&
                     !account.isNullOrBlank() &&
-                    account != STOREFRONT &&
-                    chain.args.getOrNull(3)?.toString() == STOREFRONT
+                    chain.args.getOrNull(3)?.toString() != account
                 ) {
                     val args = chain.args.toTypedArray()
                     args[3] = account
@@ -352,7 +352,7 @@ internal class CatalogSideChannel(
     private fun query(
         path: String,
         query: LinkedHashMap<String, String>,
-        localized: Boolean,
+        targetStorefront: String?,
         callback: (Any?) -> Unit,
     ) {
         val access = access
@@ -365,6 +365,7 @@ internal class CatalogSideChannel(
         fun finish(value: Any?) {
             if (!completion.compareAndSet(false, true)) return
             timeout?.let(main::removeCallbacks)
+            requestStorefronts.remove(requestId)
             main.post { callback(value) }
         }
 
@@ -387,16 +388,19 @@ internal class CatalogSideChannel(
         }
 
         val directQuery = LinkedHashMap(query)
-        if (localized) {
+        if (targetStorefront != null) {
             directQuery[TOKEN] = requestId
             directQuery["l"] = LANGUAGE
+            requestStorefronts[requestId] = targetStorefront
         }
 
         timeout = Runnable {
             if (completion.compareAndSet(false, true)) {
+                requestStorefronts.remove(requestId)
                 logger(
                     Log.ERROR,
-                    "catalog side-channel timeout id=$requestId path=$path localized=$localized",
+                    "catalog side-channel timeout id=$requestId path=$path " +
+                        "storefront=${targetStorefront ?: "native"}",
                     null,
                 )
                 callback(null)
@@ -404,13 +408,13 @@ internal class CatalogSideChannel(
         }.also { main.postDelayed(it, QUERY_TIMEOUT_MS) }
 
         runCatching {
-            if (!localized) {
+            if (targetStorefront == null) {
                 access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
             } else {
                 val previous = access.storefrontField.get(access.mediaApi) as? String
                 setupLocalizedCalls.incrementAndGet()
                 try {
-                    access.storefrontField.set(access.mediaApi, STOREFRONT)
+                    access.storefrontField.set(access.mediaApi, targetStorefront)
                     access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
                 } finally {
                     runCatching { access.storefrontField.set(access.mediaApi, previous) }
@@ -422,7 +426,8 @@ internal class CatalogSideChannel(
         }.onFailure { error ->
             logger(
                 Log.ERROR,
-                "catalog side-channel failed id=$requestId path=$path localized=$localized",
+                "catalog side-channel failed id=$requestId path=$path " +
+                    "storefront=${targetStorefront ?: "native"}",
                 error,
             )
             finish(null)
@@ -484,6 +489,14 @@ internal class CatalogSideChannel(
     private fun Alias.hasValue(): Boolean =
         title.isNotBlank() || artist.isNotBlank() || album.isNotBlank()
 
+    private fun Alias.hasChineseTitle(): Boolean =
+        title.any { char ->
+            val code = char.code
+            code in 0x3400..0x4DBF ||
+                code in 0x4E00..0x9FFF ||
+                code in 0xF900..0xFAFF
+        }
+
     private fun collectionValues(value: Any?): List<Any> = when (value) {
         is Array<*> -> value.filterNotNull()
         is Iterable<*> -> value.filterNotNull()
@@ -522,7 +535,7 @@ internal class CatalogSideChannel(
                 value.toString().contains("COROUTINE_SUSPENDED"))
 
     private fun isCoroutineFailure(value: Any?): Boolean =
-        value?.javaClass?.name == "kotlin.Result\$Failure"
+        value?.javaClass?.name == "kotlin.Result$Failure"
 
     private fun call(instance: Any, name: String, vararg args: Any?): Any? {
         var type: Class<*>? = instance.javaClass
@@ -540,8 +553,8 @@ internal class CatalogSideChannel(
 
     companion object {
         const val TOKEN = "amtool_localized_request"
-        const val STOREFRONT = "cn"
         const val LANGUAGE = "zh-CN"
+        private const val CN_STOREFRONT = "cn"
 
         private const val BATCH_DELAY_MS = 36L
         private const val BATCH_SIZE = 24
