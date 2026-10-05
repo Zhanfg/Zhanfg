@@ -535,7 +535,7 @@ internal class CatalogSideChannel(
                 value.toString().contains("COROUTINE_SUSPENDED"))
 
     private fun isCoroutineFailure(value: Any?): Boolean =
-        value?.javaClass?.name == "kotlin.Result$Failure"
+        value?.javaClass?.name == "kotlin.Result\$Failure"
 
     private fun call(instance: Any, name: String, vararg args: Any?): Any? {
         var type: Class<*>? = instance.javaClass
