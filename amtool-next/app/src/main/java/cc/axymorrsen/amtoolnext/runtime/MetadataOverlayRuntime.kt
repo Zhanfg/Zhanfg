@@ -44,6 +44,7 @@ internal class MetadataOverlayRuntime(
 
     private val contentTargets =
         ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+    private val contentNotifyMethods = ConcurrentHashMap<String, Method>()
 
     private val topSongModels =
         Collections.synchronizedMap(WeakHashMap<Any, String>())
@@ -76,8 +77,9 @@ internal class MetadataOverlayRuntime(
                         val item = chain.thisObject ?: return@intercept original
                         val mediaId = canonicalId(item, identity) ?: return@intercept original
                         rememberContentTarget(mediaId, item)
+                        if (notify != null) contentNotifyMethods[mediaId] = notify
 
-                        val alias = aliasOrRequest(mediaId, notify)
+                        val alias = aliasOrRequest(mediaId)
                         val replacement = when (name) {
                             "getTitle", "getNowPlayingTitle" -> alias?.title
                             "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
@@ -128,7 +130,7 @@ internal class MetadataOverlayRuntime(
                     topSongModels[model] = mediaId
                     chain.thisObject?.let { rememberTopSongController(mediaId, it) }
 
-                    aliasOrRequest(mediaId, notify = null)?.let { alias ->
+                    aliasOrRequest(mediaId)?.let { alias ->
                         applyTopSongAlias(model, alias)
                     }
                     model
@@ -166,7 +168,6 @@ internal class MetadataOverlayRuntime(
 
     private fun aliasOrRequest(
         mediaId: String,
-        notify: Method?,
     ): CatalogSideChannel.Alias? {
         return when (val current = state[mediaId] ?: State.Unknown) {
             is State.Hit -> current.alias
@@ -174,18 +175,18 @@ internal class MetadataOverlayRuntime(
             is State.Miss -> {
                 if (SystemClock.uptimeMillis() >= current.untilUptime) {
                     state.remove(mediaId, current)
-                    request(mediaId, notify)
+                    request(mediaId)
                 }
                 null
             }
             State.Unknown -> {
-                request(mediaId, notify)
+                request(mediaId)
                 null
             }
         }
     }
 
-    private fun request(mediaId: String, notify: Method?) {
+    private fun request(mediaId: String) {
         val id = sequence.incrementAndGet()
         if (state.putIfAbsent(mediaId, State.Loading(id)) != null) return
 
@@ -200,7 +201,7 @@ internal class MetadataOverlayRuntime(
             }
 
             if (alias != null) {
-                notifyContentTargets(mediaId, notify)
+                notifyContentTargets(mediaId)
                 refreshTopSongTargets(mediaId, alias)
                 logger(
                     Log.INFO,
@@ -245,8 +246,8 @@ internal class MetadataOverlayRuntime(
         }
     }
 
-    private fun notifyContentTargets(mediaId: String, notify: Method?) {
-        notify ?: return
+    private fun notifyContentTargets(mediaId: String) {
+        val notify = contentNotifyMethods[mediaId] ?: return
         val refs = contentTargets[mediaId] ?: return
         main.post {
             synchronized(refs) {
