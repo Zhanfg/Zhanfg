@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · alpha3", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix1", style = MaterialTheme.typography.titleMedium)
             Text(
                 "保留 Türkiye 账号、订阅与播放授权。歌词始终走账号真实 storefront；歌曲/专辑展示信息改从中国大陆目录请求简体中文。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -84,7 +84,7 @@ private fun SettingsScreen() {
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "不会修改账号地区、DSID、订阅资格或播放 URL。alpha3 同时覆盖 6.5.3 的 repository executor 与 amp-api 最终网络层。",
+                "不会修改账号地区、DSID、订阅资格或播放 URL。hotfix1 会保留单曲/播放敏感请求的 Türkiye storefront，只把浏览、搜索、专辑和艺人内容本地化。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
