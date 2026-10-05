@@ -12,6 +12,7 @@ import cc.axymorrsen.amtoolnext.config.HookConfigRuntime
 import cc.axymorrsen.amtoolnext.hook.AppleMusic653
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import java.util.LinkedHashMap
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
