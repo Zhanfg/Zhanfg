@@ -554,10 +554,10 @@ final class AppleProviderRuntimeV3 {
     }
 
     private void onLyricsBuilt(Object songNative) {
-        final long callbackGeneration;
+        final AppleLyricGenerationGate.Ticket ticket;
         final CanonicalTrack track;
         synchronized (lock) {
-            callbackGeneration = generation;
+            ticket = lyricGate.ticket();
             track = current;
         }
         if (track == null) return;
@@ -580,7 +580,7 @@ final class AppleProviderRuntimeV3 {
                 );
                 return;
             }
-            if (callbackGeneration != generation) return;
+            if (!lyricGate.accepts(ticket)) return;
 
             Object linesObject = mapRichLinesMethod == null
                     ? null
@@ -588,28 +588,27 @@ final class AppleProviderRuntimeV3 {
             if (!(linesObject instanceof List)) return;
             List<?> lines = (List<?>) linesObject;
 
-            synchronized (lock) {
-                if (callbackGeneration != generation) return;
-                if (lines.isEmpty()) {
-                    lyricState = LyricState.NO_LYRICS;
+            if (lines.isEmpty()) {
+                if (!lyricGate.markNoLyrics(ticket)) return;
+                synchronized (lock) {
                     pendingLines = null;
                     pendingGeneration = 0L;
-                } else {
-                    lyricState = LyricState.READY;
-                    pendingLines = lines;
-                    pendingGeneration = callbackGeneration;
                 }
-            }
-
-            if (lines.isEmpty()) {
                 clearOwnedLyricsFromSessions();
                 module.log(
                         Log.INFO,
                         TAG,
-                        "lyrics callback empty generation=" + callbackGeneration +
+                        "lyrics callback empty generation=" + ticket.generation +
                                 " duration=" + duration
                 );
                 return;
+            }
+
+            if (!lyricGate.markReady(ticket)) return;
+            synchronized (lock) {
+                if (!lyricGate.accepts(ticket)) return;
+                pendingLines = lines;
+                pendingGeneration = ticket.generation;
             }
             publishPendingIfPossible();
         } catch (Throwable error) {
