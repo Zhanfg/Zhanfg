@@ -2,9 +2,14 @@ package cc.axymorrsen.amtoolnext.hook
 
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
-import java.util.LinkedHashMap
+import java.lang.reflect.Modifier
 
-/** Exact symbols verified against Apple Music 6.5.3 (1599). */
+/**
+ * Exact Apple Music 6.5.3 (1599) runtime profile used by V3.
+ *
+ * Only symbols required by the new architecture live here. Legacy whole-request localization,
+ * amp-api rewriting and shared storefront-field mutation were intentionally removed.
+ */
 internal object AppleMusic653 {
     const val PACKAGE = "com.apple.android.music"
     const val LYRICS_LANGUAGE_REQUEST =
@@ -13,9 +18,11 @@ internal object AppleMusic653 {
         "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel"
     const val SONG_INFO_NATIVE =
         "com.apple.android.music.ttml.javanative.model.SongInfo\$SongInfoNative"
-    const val APP_SHARED_PREFERENCES = "com.apple.android.music.utils.AppSharedPreferences"
-    const val MEDIA_API_LOCALIZATION = "u8.E"
-    const val BASE_CONTENT_ITEM = "com.apple.android.music.model.BaseContentItem"
+    const val APP_SHARED_PREFERENCES =
+        "com.apple.android.music.utils.AppSharedPreferences"
+    const val MEDIA_API_REPOSITORY_HOLDER =
+        "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder"
+
     private val CONTENT_ITEM_CLASSES = listOf(
         "com.apple.android.music.model.BaseContentItem",
         "com.apple.android.music.model.BasePlaybackItem",
@@ -24,28 +31,35 @@ internal object AppleMusic653 {
         "com.apple.android.music.model.ArtistCollectionItem",
         "com.apple.android.music.model.MusicVideo",
     )
-    const val MEDIA_API_REPOSITORY_HOLDER =
-        "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder"
 
-    // 6.5.3 amp-api final network interceptor.
-    const val AMP_HTTP_INTERCEPTOR = "w8.d"
-    const val HTTP_CHAIN_REQUEST_FIELD = "e"
-    const val HTTP_REQUEST_URL_FIELD = "a"
-    const val HTTP_REQUEST_NEW_BUILDER_METHOD = "b"
-    const val HTTP_REQUEST_BUILDER_URL_METHOD = "h"
-    const val HTTP_REQUEST_BUILDER_HEADER_METHOD = "d"
-    const val HTTP_REQUEST_BUILDER_BUILD_METHOD = "b"
+    private data class MethodSpec(
+        val className: String,
+        val methodName: String,
+        val parameterCount: Int,
+        val queryIndex: Int,
+    )
 
-    private data class MethodSpec(val className: String, val methodName: String, val parameterCount: Int)
-
-    // 6.5.3 request executors. All use storefront at argument index 3.
+    /**
+     * 6.5.3 request executors. Storefront is always arg[3].
+     * Query index is explicit because the batch/search shapes differ.
+     */
     private val catalogExecutors = listOf(
-        MethodSpec("v8.D", "d", 7),
-        MethodSpec("v8.D", "b", 7),
-        MethodSpec("A5.l", "d", 7),
-        MethodSpec("A5.l", "c", 6),
-        MethodSpec("Ic.n", "d", 7),
-        MethodSpec("Ic.n", "e", 7),
+        MethodSpec("v8.D", "d", 7, 5),
+        MethodSpec("v8.D", "b", 7, 4),
+        MethodSpec("A5.l", "d", 7, 5),
+        MethodSpec("A5.l", "c", 6, 4),
+        MethodSpec("Ic.n", "d", 7, 5),
+        MethodSpec("Ic.n", "e", 7, 5),
+    )
+
+    data class CatalogExecutor(
+        val method: Method,
+        val queryIndex: Int,
+    )
+
+    data class MediaApiAccess(
+        val mediaApi: Any,
+        val directQuery: Method,
     )
 
     fun lyricsLanguageConstructor(loader: ClassLoader): Constructor<*> {
@@ -55,43 +69,20 @@ internal object AppleMusic653 {
         }.apply { isAccessible = true }
     }
 
-    fun mediaApiLocalization(loader: ClassLoader): Method {
-        val type = loader.loadClass(MEDIA_API_LOCALIZATION)
-        return type.declaredMethods.single { method ->
-            method.name == "c0" &&
-                method.parameterCount == 1 &&
-                Map::class.java.isAssignableFrom(method.parameterTypes[0]) &&
-                LinkedHashMap::class.java.isAssignableFrom(method.returnType)
-        }.apply { isAccessible = true }
-    }
-
-    fun catalogRequestExecutors(loader: ClassLoader): List<Method> = catalogExecutors.mapNotNull { spec ->
-        runCatching {
-            loader.loadClass(spec.className).declaredMethods.single { method ->
-                method.name == spec.methodName &&
-                    method.parameterCount == spec.parameterCount &&
-                    method.parameterTypes.getOrNull(3) == String::class.java
-            }.apply { isAccessible = true }
-        }.getOrNull()
-    }
-
-    fun ampHttpInterceptor(loader: ClassLoader): Method =
-        loader.loadClass(AMP_HTTP_INTERCEPTOR).declaredMethods.single { method ->
-            method.name == "a" && method.parameterCount == 1
-        }.apply { isAccessible = true }
-
-    /**
-     * v8.N0.d(Long dsid, String userAgent, String authorization, String storefront,
-     * String id, Map query, Continuation) — verified on Apple Music 6.5.3 (1599).
-     */
-    fun lyricsNetworkRequest(loader: ClassLoader): Method =
-        loader.loadClass("v8.N0").declaredMethods.single { method ->
-            method.name == "d" &&
-                method.parameterCount == 7 &&
-                method.parameterTypes.getOrNull(3) == String::class.java &&
-                method.parameterTypes.getOrNull(4) == String::class.java &&
-                Map::class.java.isAssignableFrom(method.parameterTypes[5])
-        }.apply { isAccessible = true }
+    fun catalogRequestExecutors(loader: ClassLoader): List<CatalogExecutor> =
+        catalogExecutors.mapNotNull { spec ->
+            runCatching {
+                val method = loader.loadClass(spec.className).declaredMethods.single { candidate ->
+                    candidate.name == spec.methodName &&
+                        candidate.parameterCount == spec.parameterCount &&
+                        candidate.parameterTypes.getOrNull(3) == String::class.java &&
+                        Map::class.java.isAssignableFrom(
+                            candidate.parameterTypes.getOrNull(spec.queryIndex)
+                        )
+                }.apply { isAccessible = true }
+                CatalogExecutor(method, spec.queryIndex)
+            }.getOrNull()
+        }
 
     fun currentSystemLyricsLanguage(loader: ClassLoader): Method =
         loader.loadClass(PLAYER_LYRICS_VIEW_MODEL).declaredMethods.single { method ->
@@ -116,6 +107,14 @@ internal object AppleMusic653 {
             }?.apply { isAccessible = true }
         }
     }
+
+    fun translationSetter(loader: ClassLoader): Method? = runCatching {
+        loader.loadClass(APP_SHARED_PREFERENCES).declaredMethods.single { method ->
+            method.name == "setLyricsTranslationSelected" &&
+                method.parameterCount == 1 &&
+                method.parameterTypes[0] == Boolean::class.javaPrimitiveType
+        }.apply { isAccessible = true }
+    }.getOrNull()
 
     fun contentItemRuntimeClasses(loader: ClassLoader): List<Class<*>> =
         CONTENT_ITEM_CLASSES.mapNotNull { name ->
@@ -145,15 +144,10 @@ internal object AppleMusic653 {
     fun contentItemNotifyChange(type: Class<*>): Method? =
         findMethod(type, "notifyChange", 0)
 
-    data class MediaApiAccess(
-        val mediaApi: Any,
-        val directQuery: Method,
-    )
-
     fun mediaApiAccess(loader: ClassLoader): MediaApiAccess {
         val holder = loader.loadClass(MEDIA_API_REPOSITORY_HOLDER)
         val companionField = holder.declaredFields.firstOrNull { field ->
-            java.lang.reflect.Modifier.isStatic(field.modifiers) &&
+            Modifier.isStatic(field.modifiers) &&
                 field.type.name == "${holder.name}\$Companion"
         } ?: error("MediaApiRepositoryHolder companion unavailable")
         companionField.isAccessible = true
@@ -161,25 +155,14 @@ internal object AppleMusic653 {
         val getMediaApi = findMethod(companion.javaClass, "getMediaApi", 0)
             ?: error("MediaApiRepositoryHolder#getMediaApi unavailable")
         val mediaApi = requireNotNull(getMediaApi.invoke(companion))
+
         val direct = findMethod(mediaApi.javaClass, "v", 3) { method ->
             val p = method.parameterTypes
             p[0] == String::class.java &&
                 Map::class.java.isAssignableFrom(p[1]) &&
-                p[2].name == "kotlin.coroutines.Continuation"
+                method.returnType == Any::class.java
         } ?: error("MediaApi#v(String,Map,Continuation) unavailable")
         return MediaApiAccess(mediaApi, direct)
-    }
-
-    private fun findField(type: Class<*>, name: String): java.lang.reflect.Field? {
-        var current: Class<*>? = type
-        while (current != null) {
-            current.declaredFields.firstOrNull { it.name == name }?.let { field ->
-                field.isAccessible = true
-                return field
-            }
-            current = current.superclass
-        }
-        return null
     }
 
     private fun findMethod(
@@ -202,12 +185,4 @@ internal object AppleMusic653 {
         }
         return null
     }
-
-    fun translationSetter(loader: ClassLoader): Method? = runCatching {
-        loader.loadClass(APP_SHARED_PREFERENCES).declaredMethods.single { method ->
-            method.name == "setLyricsTranslationSelected" &&
-                method.parameterCount == 1 &&
-                method.parameterTypes[0] == Boolean::class.javaPrimitiveType
-        }.apply { isAccessible = true }
-    }.getOrNull()
 }
