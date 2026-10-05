@@ -124,6 +124,7 @@ final class AppleProviderRuntimeV3 {
     private long generation;
     private long requestEpoch;
     private int requestAttempts;
+    private int playbackPolls;
     private LyricState lyricState = LyricState.EMPTY;
     private Object pendingLines;
     private long pendingGeneration;
@@ -339,7 +340,10 @@ final class AppleProviderRuntimeV3 {
                     cachePlaybackItem(item);
                     if (!Boolean.TRUE.equals(ownLyricRequest.get())) {
                         CanonicalTrack track = trackFromPlaybackItem(item);
-                        if (track != null) transitionTo(track, "host-loadLyrics");
+                        if (track != null) {
+                            transitionTo(track, "host-loadLyrics", false);
+                            markHostLyricRequestInFlight();
+                        }
                     }
                     return chain.proceed();
                 });
@@ -392,11 +396,11 @@ final class AppleProviderRuntimeV3 {
             info.track = track;
         }
 
-        transitionTo(track, "media-session");
+        transitionTo(track, "media-session", true);
         publishPendingIfPossible();
     }
 
-    private void transitionTo(CanonicalTrack incoming, String source) {
+    private void transitionTo(CanonicalTrack incoming, String source, boolean requestNow) {
         if (incoming == null || incoming.isBlank()) return;
 
         boolean changed;
@@ -415,6 +419,7 @@ final class AppleProviderRuntimeV3 {
             if (changed) {
                 requestEpoch++;
                 requestAttempts = 0;
+                playbackPolls = 0;
                 lyricState = LyricState.EMPTY;
                 pendingLines = null;
                 pendingGeneration = 0L;
@@ -430,7 +435,21 @@ final class AppleProviderRuntimeV3 {
                             " id=" + safe(current.id) + " title=" + safe(current.title)
             );
         }
-        maybeRequestLyrics();
+        if (requestNow) maybeRequestLyrics();
+    }
+
+    private void markHostLyricRequestInFlight() {
+        final long gen;
+        final long epoch;
+        synchronized (lock) {
+            if (current == null) return;
+            if (lyricState == LyricState.READY || lyricState == LyricState.NO_LYRICS) return;
+            lyricState = LyricState.REQUESTING;
+            if (requestAttempts == 0) requestAttempts = 1;
+            gen = generation;
+            epoch = requestEpoch;
+        }
+        scheduleRequestTimeout(gen, epoch);
     }
 
     private void cachePlaybackItem(Object item) {
@@ -493,17 +512,30 @@ final class AppleProviderRuntimeV3 {
     }
 
     private void schedulePlaybackPoll(long gen, long epoch) {
+        final int poll;
+        synchronized (lock) {
+            if (generation != gen || requestEpoch != epoch) return;
+            if (playbackPolls >= 8) return;
+            playbackPolls++;
+            poll = playbackPolls;
+        }
+
         main.postDelayed(() -> {
+            boolean found;
             synchronized (lock) {
                 if (generation != gen || requestEpoch != epoch ||
                         current == null || empty(current.id)) return;
-                if (playbackItems.containsKey(current.id)) {
+                found = playbackItems.containsKey(current.id);
+                if (found) {
                     lyricState = LyricState.EMPTY;
-                } else {
-                    return;
+                    playbackPolls = 0;
                 }
             }
-            maybeRequestLyrics();
+            if (found) {
+                maybeRequestLyrics();
+            } else if (poll < 8) {
+                schedulePlaybackPoll(gen, epoch);
+            }
         }, 180L);
     }
 
