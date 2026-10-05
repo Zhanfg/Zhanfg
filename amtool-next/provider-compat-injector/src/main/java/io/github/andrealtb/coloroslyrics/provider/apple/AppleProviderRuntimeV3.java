@@ -434,8 +434,11 @@ final class AppleProviderRuntimeV3 {
 
             if (changed) {
                 lyricGate.bindGeneration(generation);
-                pendingLines = null;
-                pendingGeneration = 0L;
+                readyLines = null;
+                readyGeneration = 0L;
+                leaseEpoch++;
+                heartbeatEpoch = -1L;
+                lastLeaseWindowKey = null;
             }
         }
 
@@ -562,8 +565,11 @@ final class AppleProviderRuntimeV3 {
                     return;
                 case NO_LYRICS:
                     synchronized (lock) {
-                        pendingLines = null;
-                        pendingGeneration = 0L;
+                        readyLines = null;
+                        readyGeneration = 0L;
+                        leaseEpoch++;
+                        heartbeatEpoch = -1L;
+                        lastLeaseWindowKey = null;
                     }
                     clearOwnedLyricsFromSessions();
                     module.log(
@@ -617,8 +623,11 @@ final class AppleProviderRuntimeV3 {
             if (lines.isEmpty()) {
                 if (!lyricGate.markNoLyrics(ticket)) return;
                 synchronized (lock) {
-                    pendingLines = null;
-                    pendingGeneration = 0L;
+                    readyLines = null;
+                    readyGeneration = 0L;
+                    leaseEpoch++;
+                    heartbeatEpoch = -1L;
+                    lastLeaseWindowKey = null;
                 }
                 clearOwnedLyricsFromSessions();
                 module.log(
@@ -633,10 +642,14 @@ final class AppleProviderRuntimeV3 {
             if (!lyricGate.markReady(ticket)) return;
             synchronized (lock) {
                 if (!lyricGate.accepts(ticket)) return;
-                pendingLines = lines;
-                pendingGeneration = ticket.generation;
+                readyLines = lines;
+                readyGeneration = ticket.generation;
+                leaseEpoch++;
+                heartbeatEpoch = -1L;
+                lastLeaseWindowKey = null;
             }
-            publishPendingIfPossible();
+            publishLeaseIfPossible();
+            scheduleLeaseHeartbeat();
         } catch (Throwable error) {
             module.log(Log.ERROR, TAG, "lyrics callback parse failed", error);
         }
