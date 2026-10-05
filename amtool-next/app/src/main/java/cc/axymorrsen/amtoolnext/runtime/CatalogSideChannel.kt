@@ -414,7 +414,7 @@ internal class CatalogSideChannel(
                 EntitySnapshot(
                     ids = ids,
                     isrc = isrc,
-                    alias = Alias(title, artist, album).takeIf(Alias::hasValue),
+                    alias = Alias(title, artist, album).takeIf { it.hasValue() },
                 )
             }
         }
