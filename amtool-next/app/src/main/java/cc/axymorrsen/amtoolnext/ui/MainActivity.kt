@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix3", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix4", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Türkiye 账号、订阅、播放对象和原生请求保持不变；中文标题改用独立 CN catalog 查询后，仅覆盖界面 getter 返回值。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -84,7 +84,7 @@ private fun SettingsScreen() {
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "hotfix3 只让 AMTool 自己发起的 metadata 查询进入 cn/zh-CN；Apple Music 自己的请求继续完整保持 Türkiye。",
+                "hotfix4 修正 6.5.3 的真实直连方法 v()，并覆盖 Song / BasePlaybackItem 等实际 getter；原生播放请求仍完整保持 Türkiye。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
