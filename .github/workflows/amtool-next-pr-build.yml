@@ -5,13 +5,14 @@ on:
     branches: [ main ]
     paths:
       - 'amtool-next/**'
+      - 'apple-lyric-provider-compat/**'
       - '.github/workflows/amtool-next-pr-build.yml'
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  amtool:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,9 +41,61 @@ jobs:
           unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
           unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
           unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
-      - name: Upload APK
+      - name: Upload AMTool APK
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-2.0.0-alpha1-debug
+          name: AMTool-Next-2.0.0-alpha3-hotfix4-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  apple-provider-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@v7
+        with:
+          path: overlay
+      - name: Checkout provider upstream
+        uses: actions/checkout@v7
+        with:
+          repository: Andrea-lyz/ColorOS-Live-Lyrics-Providers
+          ref: b2d07c34efc917d21b28fa246cb2a004269484d4
+          path: source
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+      - name: Install Android SDK 37
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      - name: Apply AMTool compatibility overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="source/player-apple/src/main/kotlin/io/github/andrealtb/coloroslyrics/provider/apple"
+          cp overlay/apple-lyric-provider-compat/AppleTrackIdentity.kt "$target/AppleTrackIdentity.kt"
+          cp overlay/apple-lyric-provider-compat/AppleTrackBindPolicy.kt "$target/AppleTrackBindPolicy.kt"
+          cp overlay/apple-lyric-provider-compat/AppleSongParser.kt "$target/AppleSongParser.kt"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("source/player-apple/build.gradle.kts")
+          s = p.read_text()
+          s = s.replace('versionName = "1.2.0"', 'versionName = "1.2.0-hotfix1-amtool"')
+          p.write_text(s)
+          PY
+      - name: Test and build Apple lyric provider
+        working-directory: source
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon             :player-apple:testDebugUnitTest             :player-apple:assembleDebug             :player-apple:verifyXposedApi102Resources             --stacktrace --console=plain
+      - name: Upload Apple lyric provider APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apple-Music-Lyric-Provider-1.2.0-hotfix1-amtool
+          path: source/player-apple/build/outputs/apk/debug/*.apk
           if-no-files-found: error
