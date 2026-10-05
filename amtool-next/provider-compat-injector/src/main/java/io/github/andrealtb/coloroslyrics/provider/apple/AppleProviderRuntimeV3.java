@@ -171,7 +171,7 @@ final class AppleProviderRuntimeV3 {
         installHostTaskLifecycleHooks();
         installPlaybackDiscoveryHooks();
         installLyricsHooks();
-        module.log(Log.INFO, TAG, "provider runtime v3 installed");
+        module.log(Log.INFO, TAG, "provider runtime v3 alpha7 host-observer installed");
     }
 
     private void resolveProviderPrimitives() throws Exception {
@@ -201,18 +201,6 @@ final class AppleProviderRuntimeV3 {
         if (generationObserve == null) {
             throw new NoSuchMethodException("TrackGenerationPolicy#onTrackObserved");
         }
-
-        Class<?> requesterType = moduleLoader.loadClass(
-                "io.github.andrealtb.coloroslyrics.provider.apple.AppleLyricRequester");
-        Constructor<?> requesterCtor = requesterType.getDeclaredConstructor(
-                ClassLoader.class,
-                Application.class,
-                Handler.class
-        );
-        requesterCtor.setAccessible(true);
-        requester = requesterCtor.newInstance(hostLoader, application, main);
-        requesterSetLoadMethod = findMethod(requesterType, "setLoadLyricsMethod", 1);
-        requesterRequestDownload = findMethod(requesterType, "requestDownload", 1);
 
         Class<?> parserType = moduleLoader.loadClass(
                 "io.github.andrealtb.coloroslyrics.provider.apple.AppleSongParser");
@@ -251,10 +239,6 @@ final class AppleProviderRuntimeV3 {
                     MediaSession session = (MediaSession) chain.getThisObject();
                     MediaMetadata metadata = (MediaMetadata) chain.getArg(0);
                     if (session == null || metadata == null) return chain.proceed();
-
-                    if (Boolean.TRUE.equals(moduleWrite.get())) {
-                        return chain.proceed();
-                    }
 
                     onHostMetadata(session, metadata);
                     return chain.proceed();
@@ -322,8 +306,11 @@ final class AppleProviderRuntimeV3 {
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept(chain -> {
                     MediaSession session = (MediaSession) chain.getThisObject();
-                    clearOwnedLyricsFromSession(session);
                     synchronized (lock) {
+                        SessionState state = sessions.get(session);
+                        if (state != null && state.metadata != null) {
+                            clearOwnedLyricInfo(state.metadata);
+                        }
                         sessions.remove(session);
                         leaseEpoch++;
                     }
@@ -523,7 +510,6 @@ final class AppleProviderRuntimeV3 {
 
         if (resumed) {
             module.log(Log.INFO, TAG, "host task lease restored source=" + source);
-            maybeRequestLyrics();
         }
     }
 
@@ -542,9 +528,9 @@ final class AppleProviderRuntimeV3 {
             leaseEpoch++;
         }
 
-        // Do this synchronously while the Apple Music process/service is still alive so ColorOS
-        // receives a final MediaSession metadata update with our lyricInfo removed.
-        retractOwnedLyricsFromSessions();
+        // Strict playback-passive invariant: never create a provider-owned MediaSession metadata
+        // transaction. Clear only our cached Java objects; process/session teardown owns delivery.
+        clearOwnedLyricsInMemory();
 
         if (changed) {
             module.log(Log.INFO, TAG, "host task lease revoked source=" + source);
@@ -598,21 +584,15 @@ final class AppleProviderRuntimeV3 {
             throw new NoSuchMethodException("PlayerLyricsViewModel#loadLyrics");
         }
         loadLyricsMethod.setAccessible(true);
-        if (requesterSetLoadMethod != null) {
-            requesterSetLoadMethod.invoke(requester, loadLyricsMethod);
-        }
-
         module.hook(loadLyricsMethod)
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept(chain -> {
                     Object item = chain.getArg(0);
                     cachePlaybackItem(item);
-                    if (!Boolean.TRUE.equals(ownLyricRequest.get())) {
-                        CanonicalTrack track = trackFromPlaybackItem(item);
-                        if (track != null) {
-                            transitionTo(track, "host-loadLyrics", false);
-                            markHostLyricRequestInFlight();
-                        }
+                    CanonicalTrack track = trackFromPlaybackItem(item);
+                    if (track != null) {
+                        transitionTo(track, "host-loadLyrics", false);
+                        markHostLyricRequestInFlight();
                     }
                     return chain.proceed();
                 });
@@ -702,24 +682,15 @@ final class AppleProviderRuntimeV3 {
                             " id=" + safe(current.id) + " title=" + safe(current.title)
             );
         }
-        if (requestNow) {
-            AppleLyricGenerationGate.Ticket ticket = lyricGate.ticket();
-            main.postDelayed(() -> {
-                if (lyricGate.accepts(ticket)) {
-                    maybeRequestLyrics();
-                }
-            }, SYNTHETIC_LYRIC_GRACE_MS);
-        }
+        // requestNow is retained as a call-site semantic marker only. Provider V3 alpha7 never
+        // invokes PlayerLyricsViewModel#loadLyrics itself; it only observes host-owned requests.
     }
 
     private void markHostLyricRequestInFlight() {
-        final AppleLyricGenerationGate.Ticket ticket;
         synchronized (lock) {
             if (!hostTaskPresent || current == null) return;
             lyricGate.markHostRequestInFlight();
-            ticket = lyricGate.ticket();
         }
-        scheduleRequestTimeout(ticket);
     }
 
     private void cachePlaybackItem(Object item) {
@@ -728,110 +699,8 @@ final class AppleProviderRuntimeV3 {
         synchronized (lock) {
             playbackItems.put(track.id, item);
         }
-
-        // Cache only. A provider-owned lyric request is intentionally delayed by the
-        // generation grace window so playback/decoder startup is not disturbed.
-        CanonicalTrack snapshot;
-        synchronized (lock) {
-            snapshot = current;
-        }
-        if (snapshot != null && snapshot.same(track)) {
-            return;
-        }
-    }
-
-    private void maybeRequestLyrics() {
-        final CanonicalTrack track;
-        final Object item;
-        final AppleLyricGenerationGate.Ticket ticket;
-        final int attempt;
-
-        synchronized (lock) {
-            if (!hostTaskPresent) return;
-            track = current;
-            if (track == null || empty(track.id)) return;
-
-            AppleLyricGenerationGate.Phase phase = lyricGate.phase();
-            if (phase == AppleLyricGenerationGate.Phase.READY ||
-                    phase == AppleLyricGenerationGate.Phase.NO_LYRICS) {
-                return;
-            }
-
-            item = playbackItems.get(track.id);
-            ticket = lyricGate.ticket();
-            if (item == null) {
-                schedulePlaybackPoll(ticket);
-                return;
-            }
-            if (!lyricGate.beginProviderRequest()) return;
-            attempt = lyricGate.attempts();
-        }
-
-        main.post(() -> {
-            if (!lyricGate.accepts(ticket)) return;
-
-            boolean accepted = false;
-            try {
-                ownLyricRequest.set(true);
-                Object value = requesterRequestDownload.invoke(requester, item);
-                accepted = !(value instanceof Boolean) || (Boolean) value;
-            } catch (Throwable error) {
-                module.log(Log.ERROR, TAG, "lyrics request failed", error);
-            } finally {
-                ownLyricRequest.remove();
-            }
-
-            module.log(
-                    Log.INFO,
-                    TAG,
-                    "lyrics request generation=" + ticket.generation +
-                            " attempt=" + attempt +
-                            " accepted=" + accepted
-            );
-            scheduleRequestTimeout(ticket);
-        });
-    }
-
-    private void schedulePlaybackPoll(AppleLyricGenerationGate.Ticket ticket) {
-        final int poll = lyricGate.nextPlaybackPoll(ticket, 8);
-        if (poll < 0) return;
-
-        main.postDelayed(() -> {
-            if (!lyricGate.accepts(ticket)) return;
-
-            boolean found;
-            synchronized (lock) {
-                if (current == null || empty(current.id)) return;
-                found = playbackItems.containsKey(current.id);
-            }
-
-            if (found) {
-                lyricGate.playbackItemFound(ticket);
-                maybeRequestLyrics();
-            } else if (poll < 8) {
-                schedulePlaybackPoll(ticket);
-            }
-        }, 180L);
-    }
-
-    private void scheduleRequestTimeout(AppleLyricGenerationGate.Ticket ticket) {
-        main.postDelayed(() -> {
-            AppleLyricGenerationGate.TimeoutAction action =
-                    lyricGate.onTimeout(ticket, 1);
-            if (action == AppleLyricGenerationGate.TimeoutAction.NO_LYRICS) {
-                synchronized (lock) {
-                    readyLines = null;
-                    readyGeneration = 0L;
-                    leaseEpoch++;
-                }
-                clearOwnedLyricsInMemory();
-                module.log(
-                        Log.INFO,
-                        TAG,
-                        "lyrics fallback timed out generation=" + ticket.generation
-                );
-            }
-        }, SYNTHETIC_LYRIC_TIMEOUT_MS);
+        // Cache only. Synthetic PlayerLyricsViewModel construction/requesting was removed in
+        // alpha7 because it can cause Apple Music to rebind the player and restart playback.
     }
 
     private void onLyricsBuilt(Object songNative) {
@@ -908,7 +777,7 @@ final class AppleProviderRuntimeV3 {
     /**
      * Attach ready lyrics only while Apple Music itself is already publishing MediaMetadata.
      *
-     * Calling MediaSession#setMetadata from the provider while playback is active can race
+     * Any provider-owned playback/session transaction can race
      * Apple Music's decoder/session hand-off. The device symptom is a track that advances only
      * a few seconds and then behaves like a preview until a lyric seek forces another player
      * transition. V3 alpha6+ therefore treats Apple's setMetadata call as the only live carrier:
@@ -1022,48 +891,8 @@ final class AppleProviderRuntimeV3 {
         return fallback;
     }
 
-    private void clearOwnedLyricsFromSession(MediaSession session) {
-        if (session == null) return;
-        MediaMetadata metadata;
-        synchronized (lock) {
-            SessionState state = sessions.get(session);
-            metadata = state == null ? null : state.metadata;
-        }
-        if (metadata != null && clearOwnedLyricInfo(metadata)) {
-            writeSessionMetadata(session, metadata);
-        }
-    }
-
     private void clearOwnedLyricsFromSessions() {
         clearOwnedLyricsInMemory();
-    }
-
-    private void retractOwnedLyricsFromSessions() {
-        List<Map.Entry<MediaSession, MediaMetadata>> updates = new ArrayList<>();
-        synchronized (lock) {
-            for (Map.Entry<MediaSession, SessionState> entry : sessions.entrySet()) {
-                MediaSession session = entry.getKey();
-                SessionState state = entry.getValue();
-                if (session == null || state == null || state.metadata == null) continue;
-                if (clearOwnedLyricInfo(state.metadata)) {
-                    updates.add(Map.entry(session, state.metadata));
-                }
-            }
-        }
-        for (Map.Entry<MediaSession, MediaMetadata> update : updates) {
-            writeSessionMetadata(update.getKey(), update.getValue());
-        }
-    }
-
-    private void writeSessionMetadata(MediaSession session, MediaMetadata metadata) {
-        try {
-            moduleWrite.set(true);
-            session.setMetadata(metadata);
-        } catch (Throwable error) {
-            module.log(Log.ERROR, TAG, "session metadata write failed", error);
-        } finally {
-            moduleWrite.remove();
-        }
     }
 
     private SessionState sessionState(MediaSession session) {
