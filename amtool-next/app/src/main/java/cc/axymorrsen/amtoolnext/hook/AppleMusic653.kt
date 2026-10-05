@@ -216,6 +216,15 @@ internal object AppleMusic653 {
         return catalogId?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
     }
 
+    fun mediaEntityIsrc(entity: Any): String? {
+        val attributes = findMethod(entity.javaClass, "getAttributes", 0)
+            ?.let { runCatching { it.invoke(entity) }.getOrNull() }
+            ?: return null
+        return findMethod(attributes.javaClass, "getIsrc", 0)
+            ?.let { runCatching { it.invoke(attributes)?.toString()?.trim() }.getOrNull() }
+            ?.takeIf(String::isNotEmpty)
+    }
+
     fun mediaApiAccess(loader: ClassLoader): MediaApiAccess {
         val holder = loader.loadClass(MEDIA_API_REPOSITORY_HOLDER)
         val companionField = holder.declaredFields.firstOrNull { field ->
