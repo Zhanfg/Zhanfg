@@ -6,6 +6,7 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.reflect.Constructor;
@@ -33,6 +34,9 @@ final class AppleProviderRuntimeV3 {
     private static final String MEDIA_ID =
             "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String LYRIC_INFO = "lyricInfo";
+    private static final long LEASE_HEARTBEAT_MS = 800L;
+    private static final long LEASE_PAST_MS = 1_000L;
+    private static final long LEASE_FUTURE_MS = 4_500L;
 
     private static final class CanonicalTrack {
         final String id;
@@ -78,6 +82,7 @@ final class AppleProviderRuntimeV3 {
     private static final class SessionState {
         MediaMetadata metadata;
         CanonicalTrack track;
+        PlaybackState playback;
         int playbackState = PlaybackState.STATE_NONE;
         boolean active;
     }
@@ -116,8 +121,11 @@ final class AppleProviderRuntimeV3 {
     private CanonicalTrack current;
     private Object currentTrackIdentity;
     private long generation;
-    private Object pendingLines;
-    private long pendingGeneration;
+    private Object readyLines;
+    private long readyGeneration;
+    private long leaseEpoch;
+    private long heartbeatEpoch = -1L;
+    private String lastLeaseWindowKey;
 
     AppleProviderRuntimeV3(
             XposedModule module,
