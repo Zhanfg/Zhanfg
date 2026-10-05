@@ -32,7 +32,13 @@ jobs:
           gradle-version: '9.7.1'
       - name: Test and build debug APK
         working-directory: amtool-next
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug --stacktrace --console=plain
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:assembleDebug --stacktrace --console=plain
+      - name: Upload provider compatibility helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apple-Provider-AMTool-Compat-Helper
+          path: amtool-next/provider-compat-injector/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
       - name: Verify modern Xposed metadata
         shell: bash
         run: |
