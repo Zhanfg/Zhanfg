@@ -11,8 +11,8 @@ android {
         applicationId = "cc.axymorrsen.amtoolnext"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2000009
-        versionName = "2.0.0-alpha3-hotfix6"
+        versionCode = 3000001
+        versionName = "3.0.0-alpha1"
     }
 
     buildTypes {
