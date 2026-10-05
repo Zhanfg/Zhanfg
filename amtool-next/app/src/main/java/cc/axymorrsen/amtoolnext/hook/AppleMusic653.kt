@@ -117,8 +117,12 @@ internal object AppleMusic653 {
         }
     }
 
-    fun contentItemGetterMethods(loader: ClassLoader): Map<String, Method> {
-        val type = loader.loadClass(BASE_CONTENT_ITEM)
+    fun contentItemRuntimeClasses(loader: ClassLoader): List<Class<*>> =
+        CONTENT_ITEM_CLASSES.mapNotNull { name ->
+            runCatching { loader.loadClass(name) }.getOrNull()
+        }
+
+    fun contentItemGetterMethods(type: Class<*>): Map<String, Method> {
         val names = listOf(
             "getTitle",
             "getNowPlayingTitle",
@@ -127,22 +131,19 @@ internal object AppleMusic653 {
             "getCollectionName",
         )
         return names.mapNotNull { name ->
-            findMethod(type, name, 0)?.takeIf { it.returnType == String::class.java }?.let { name to it }
+            findMethod(type, name, 0)
+                ?.takeIf { it.returnType == String::class.java }
+                ?.let { name to it }
         }.toMap()
     }
 
-    fun contentItemIdentityMethods(loader: ClassLoader): Map<String, Method> {
-        val type = loader.loadClass(BASE_CONTENT_ITEM)
-        return listOf(
-            "getSubscriptionStoreId",
-            "getId",
-        ).mapNotNull { name ->
+    fun contentItemIdentityMethods(type: Class<*>): Map<String, Method> =
+        listOf("getSubscriptionStoreId", "getId").mapNotNull { name ->
             findMethod(type, name, 0)?.let { name to it }
         }.toMap()
-    }
 
-    fun contentItemNotifyChange(loader: ClassLoader): Method? =
-        findMethod(loader.loadClass(BASE_CONTENT_ITEM), "notifyChange", 0)
+    fun contentItemNotifyChange(type: Class<*>): Method? =
+        findMethod(type, "notifyChange", 0)
 
     data class MediaApiAccess(
         val mediaApi: Any,
