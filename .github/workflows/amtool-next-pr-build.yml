@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: amtool-next-v3-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   v3:
     runs-on: ubuntu-latest
