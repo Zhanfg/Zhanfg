@@ -89,7 +89,7 @@ internal class CatalogSideChannel(
 
         var schedule = false
         synchronized(pendingLock) {
-            pending.getOrPut(id, ::Pending).callbacks += callback
+            pending.getOrPut(id) { Pending() }.callbacks += callback
             if (!flushScheduled) {
                 flushScheduled = true
                 schedule = true
