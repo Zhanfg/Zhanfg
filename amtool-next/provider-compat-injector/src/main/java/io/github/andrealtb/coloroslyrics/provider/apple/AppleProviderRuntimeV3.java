@@ -34,13 +34,6 @@ final class AppleProviderRuntimeV3 {
             "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String LYRIC_INFO = "lyricInfo";
 
-    private enum LyricState {
-        EMPTY,
-        REQUESTING,
-        READY,
-        NO_LYRICS
-    }
-
     private static final class CanonicalTrack {
         final String id;
         final String title;
@@ -97,6 +90,7 @@ final class AppleProviderRuntimeV3 {
     private final Object lock = new Object();
     private final ThreadLocal<Boolean> moduleWrite = new ThreadLocal<>();
     private final ThreadLocal<Boolean> ownLyricRequest = new ThreadLocal<>();
+    private final AppleLyricGenerationGate lyricGate = new AppleLyricGenerationGate();
 
     private final WeakHashMap<MediaSession, SessionState> sessions = new WeakHashMap<>();
     private final LinkedHashMap<String, Object> playbackItems =
@@ -122,10 +116,6 @@ final class AppleProviderRuntimeV3 {
     private CanonicalTrack current;
     private Object currentTrackIdentity;
     private long generation;
-    private long requestEpoch;
-    private int requestAttempts;
-    private int playbackPolls;
-    private LyricState lyricState = LyricState.EMPTY;
     private Object pendingLines;
     private long pendingGeneration;
 
