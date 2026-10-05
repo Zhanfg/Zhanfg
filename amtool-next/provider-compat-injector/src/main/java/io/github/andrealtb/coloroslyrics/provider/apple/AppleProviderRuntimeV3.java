@@ -544,7 +544,7 @@ final class AppleProviderRuntimeV3 {
 
         // Do this synchronously while the Apple Music process/service is still alive so ColorOS
         // receives a final MediaSession metadata update with our lyricInfo removed.
-        clearOwnedLyricsFromSessions();
+        retractOwnedLyricsFromSessions();
 
         if (changed) {
             module.log(Log.INFO, TAG, "host task lease revoked source=" + source);
@@ -1036,6 +1036,23 @@ final class AppleProviderRuntimeV3 {
 
     private void clearOwnedLyricsFromSessions() {
         clearOwnedLyricsInMemory();
+    }
+
+    private void retractOwnedLyricsFromSessions() {
+        List<Map.Entry<MediaSession, MediaMetadata>> updates = new ArrayList<>();
+        synchronized (lock) {
+            for (Map.Entry<MediaSession, SessionState> entry : sessions.entrySet()) {
+                MediaSession session = entry.getKey();
+                SessionState state = entry.getValue();
+                if (session == null || state == null || state.metadata == null) continue;
+                if (clearOwnedLyricInfo(state.metadata)) {
+                    updates.add(Map.entry(session, state.metadata));
+                }
+            }
+        }
+        for (Map.Entry<MediaSession, MediaMetadata> update : updates) {
+            writeSessionMetadata(update.getKey(), update.getValue());
+        }
     }
 
     private void writeSessionMetadata(MediaSession session, MediaMetadata metadata) {
