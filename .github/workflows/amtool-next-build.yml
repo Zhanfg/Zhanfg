@@ -9,6 +9,10 @@ on:
       - '.github/workflows/amtool-next-build.yml'
   workflow_dispatch:
 
+concurrency:
+  group: amtool-next-v3-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
