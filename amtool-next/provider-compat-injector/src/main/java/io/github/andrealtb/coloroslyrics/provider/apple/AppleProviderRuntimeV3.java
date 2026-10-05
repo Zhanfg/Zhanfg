@@ -413,7 +413,8 @@ final class AppleProviderRuntimeV3 {
         }
 
         transitionTo(track, "media-session", true);
-        publishPendingIfPossible();
+        publishLeaseIfPossible();
+        scheduleLeaseHeartbeat();
     }
 
     private void transitionTo(CanonicalTrack incoming, String source, boolean requestNow) {
