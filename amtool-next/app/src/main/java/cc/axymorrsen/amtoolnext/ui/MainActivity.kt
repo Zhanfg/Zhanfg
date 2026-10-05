@@ -58,9 +58,9 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix6", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha1", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Türkiye 账号、订阅、播放对象和原生请求保持不变；中文标题改用独立 CN catalog 查询后，仅覆盖界面 getter 返回值。",
+                "V3 将播放、歌词、中文 metadata 三条链彻底拆开：账号与播放始终保持 Türkiye；中文 metadata 只走模块自有请求；歌词只控制语言与展示。",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(18.dp))
@@ -77,14 +77,14 @@ private fun SettingsScreen() {
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "CN 旁路查询 + UI 覆盖；不修改 playParams、availability 或原生 storefront", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "土区 ID → ISRC → CN 对应录音 → 仅覆盖 UI；不触碰 playParams / availability", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
 
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "hotfix6 保留 ISRC 跨区中文标题映射，并配套修复歌词路由：切到无歌词歌曲时立即清掉上一首模块歌词，迟到的旧歌词结果也不会重新覆盖当前歌曲。",
+                "3.0.0-alpha1 为完整架构重写：移除共享 storefront 字段切换和全局 URL 改写；中文请求只在 6.5.3 精确 executor 上按私有 token 路由。配套 Provider V3 使用单一 Track Generation 状态机处理有歌词、无歌词、快速切歌和迟到回调。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
