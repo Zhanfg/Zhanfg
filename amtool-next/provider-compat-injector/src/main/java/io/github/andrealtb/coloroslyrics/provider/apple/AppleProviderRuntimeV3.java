@@ -1035,20 +1035,7 @@ final class AppleProviderRuntimeV3 {
     }
 
     private void clearOwnedLyricsFromSessions() {
-        List<Map.Entry<MediaSession, MediaMetadata>> updates = new ArrayList<>();
-        synchronized (lock) {
-            for (Map.Entry<MediaSession, SessionState> entry : sessions.entrySet()) {
-                MediaSession session = entry.getKey();
-                SessionState state = entry.getValue();
-                if (session == null || state == null || state.metadata == null) continue;
-                if (clearOwnedLyricInfo(state.metadata)) {
-                    updates.add(Map.entry(session, state.metadata));
-                }
-            }
-        }
-        for (Map.Entry<MediaSession, MediaMetadata> update : updates) {
-            writeSessionMetadata(update.getKey(), update.getValue());
-        }
+        clearOwnedLyricsInMemory();
     }
 
     private void writeSessionMetadata(MediaSession session, MediaMetadata metadata) {
