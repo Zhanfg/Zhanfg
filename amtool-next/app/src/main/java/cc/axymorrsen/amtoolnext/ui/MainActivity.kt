@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha5", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha6", style = MaterialTheme.typography.titleMedium)
             Text(
                 "V3 将播放、歌词、中文 metadata 三条链彻底拆开：账号与播放始终保持 Türkiye；中文 metadata 只走模块自有请求；歌词只控制语言与展示。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -83,7 +83,7 @@ private fun SettingsScreen() {
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "3.0.0-alpha5：完全移除悬浮底栏及其 Activity/View Hook，恢复 Apple Music 原生底部导航与迷你播放器布局。中文 metadata、歌词语言和 Provider V3 状态机继续保留。Türkiye 播放链仍完全不改。",
+                "3.0.0-alpha6：修正播放稳定性。AMTool 不再写共享 MediaApi storefront；Provider 也删除 500ms 滚动歌词 heartbeat，不再在播放过程中持续重写 MediaSession metadata。悬浮底栏继续保持禁用，先以原生布局保证性能与播放稳定。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
