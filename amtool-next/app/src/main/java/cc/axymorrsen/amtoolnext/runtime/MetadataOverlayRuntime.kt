@@ -45,11 +45,14 @@ internal class MetadataOverlayRuntime(
     private val contentTargets =
         ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
     private val contentNotifyMethods = ConcurrentHashMap<String, Method>()
+    private val isrcHints = ConcurrentHashMap<String, String>()
 
     private val topSongModels =
         Collections.synchronizedMap(WeakHashMap<Any, String>())
     private val topSongControllers =
         ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+    private val pendingControllerRebuilds =
+        Collections.synchronizedMap(WeakHashMap<Any, Runnable>())
 
     private var topSongSurface: AppleMusic653.ArtistTopSongSurface? = null
 
@@ -128,6 +131,7 @@ internal class MetadataOverlayRuntime(
                         ?: return@intercept model
 
                     topSongModels[model] = mediaId
+                    AppleMusic653.mediaEntityIsrc(entity)?.let { isrcHints[mediaId] = it }
                     chain.thisObject?.let { rememberTopSongController(mediaId, it) }
 
                     aliasOrRequest(mediaId)?.let { alias ->
@@ -190,7 +194,7 @@ internal class MetadataOverlayRuntime(
         val id = sequence.incrementAndGet()
         if (state.putIfAbsent(mediaId, State.Loading(id)) != null) return
 
-        catalog.resolve(mediaId) { alias ->
+        catalog.resolve(mediaId, isrcHints[mediaId]) { alias ->
             val expected = state[mediaId] as? State.Loading
             if (expected?.request != id) return@resolve
 
@@ -305,7 +309,7 @@ internal class MetadataOverlayRuntime(
                         if (controller == null) {
                             true
                         } else {
-                            requestModelBuild(controller)
+                            scheduleControllerRebuild(controller)
                             false
                         }
                     }
@@ -315,6 +319,20 @@ internal class MetadataOverlayRuntime(
             if (changed) {
                 logger(Log.INFO, "artist Top Songs rebound id=$mediaId title=${alias.title}", null)
             }
+        }
+    }
+
+    private fun scheduleControllerRebuild(controller: Any) {
+        synchronized(pendingControllerRebuilds) {
+            if (pendingControllerRebuilds.containsKey(controller)) return
+            val task = Runnable {
+                synchronized(pendingControllerRebuilds) {
+                    pendingControllerRebuilds.remove(controller)
+                }
+                requestModelBuild(controller)
+            }
+            pendingControllerRebuilds[controller] = task
+            main.postDelayed(task, 32L)
         }
     }
 
