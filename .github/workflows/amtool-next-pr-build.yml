@@ -36,6 +36,13 @@ jobs:
       - name: Test and build V3
         working-directory: amtool-next
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:testDebugUnitTest :provider-compat-injector:assembleDebug --stacktrace --console=plain
+      - name: Verify playback-safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n "storefrontField\.set" amtool-next/app/src/main/java/cc/axymorrsen/amtoolnext
+          ! grep -R -n -E "LEASE_HEARTBEAT_MS|scheduleLeaseHeartbeat\(|leaseWindow\(" amtool-next/provider-compat-injector/src/main/java
+          ! grep -R -n "setupLocalizedCalls" amtool-next/app/src/main/java/cc/axymorrsen/amtoolnext
       - name: Verify AMTool Xposed API 102 metadata
         shell: bash
         run: |
