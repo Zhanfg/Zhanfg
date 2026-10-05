@@ -242,13 +242,22 @@ final class AppleProviderRuntimeV3 {
                     Object result = chain.proceed();
                     MediaSession session = (MediaSession) chain.getThisObject();
                     PlaybackState state = (PlaybackState) chain.getArg(0);
+                    int value = state == null
+                            ? PlaybackState.STATE_NONE
+                            : state.getState();
                     synchronized (lock) {
                         SessionState info = sessionState(session);
-                        info.playbackState = state == null
-                                ? PlaybackState.STATE_NONE
-                                : state.getState();
+                        info.playback = state;
+                        info.playbackState = value;
                     }
-                    publishPendingIfPossible();
+
+                    if (isTerminalPlaybackState(value)) {
+                        invalidateLease();
+                        clearOwnedLyricsFromSession(session);
+                    } else {
+                        publishLeaseIfPossible();
+                        scheduleLeaseHeartbeat();
+                    }
                     return result;
                 });
 
@@ -260,10 +269,16 @@ final class AppleProviderRuntimeV3 {
                 .intercept(chain -> {
                     Object result = chain.proceed();
                     MediaSession session = (MediaSession) chain.getThisObject();
+                    boolean active = (Boolean) chain.getArg(0);
                     synchronized (lock) {
-                        sessionState(session).active = (Boolean) chain.getArg(0);
+                        sessionState(session).active = active;
                     }
-                    publishPendingIfPossible();
+                    if (!active) {
+                        clearOwnedLyricsFromSession(session);
+                    } else {
+                        publishLeaseIfPossible();
+                        scheduleLeaseHeartbeat();
+                    }
                     return result;
                 });
 
@@ -273,8 +288,11 @@ final class AppleProviderRuntimeV3 {
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept(chain -> {
                     MediaSession session = (MediaSession) chain.getThisObject();
+                    clearOwnedLyricsFromSession(session);
                     synchronized (lock) {
                         sessions.remove(session);
+                        leaseEpoch++;
+                        heartbeatEpoch = -1L;
                     }
                     return chain.proceed();
                 });
