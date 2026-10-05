@@ -272,11 +272,6 @@ internal object AppleMusic653 {
             ?: error("MediaApi storefront field s unavailable")
         storefrontField.isAccessible = true
 
-        val storefrontField = findField(mediaApi.javaClass, "s")
-            ?.takeIf { it.type == String::class.java }
-            ?: error("MediaApi storefront field s unavailable")
-        storefrontField.isAccessible = true
-
         val direct = findMethod(mediaApi.javaClass, "v", 3) { method ->
             val p = method.parameterTypes
             p[0] == String::class.java &&
