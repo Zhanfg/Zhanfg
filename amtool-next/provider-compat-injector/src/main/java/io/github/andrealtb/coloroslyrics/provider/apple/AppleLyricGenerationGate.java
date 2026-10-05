@@ -80,7 +80,7 @@ final class AppleLyricGenerationGate {
     }
 
     synchronized void markHostRequestInFlight() {
-        if (phase == Phase.READY || phase == Phase.NO_LYRICS) return;
+        if (phase == Phase.READY) return;
         phase = Phase.REQUESTING;
         if (requestAttempts == 0) requestAttempts = 1;
     }
