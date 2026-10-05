@@ -2,6 +2,8 @@ package cc.axymorrsen.amtoolnext.hook
 
 import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import cc.axymorrsen.amtoolnext.config.ConfigCodec
 import cc.axymorrsen.amtoolnext.config.ConfigKeys
@@ -12,7 +14,10 @@ import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.lang.reflect.Proxy
+import java.lang.ref.WeakReference
 import java.util.LinkedHashMap
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -26,6 +31,19 @@ class AmToolModule : XposedModule() {
     private val ampHits = AtomicLong()
     private val reflectionMethodCache = ConcurrentHashMap<String, Method>()
     private val reflectionFieldCache = ConcurrentHashMap<String, Field>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val localizedMetadata = ConcurrentHashMap<String, LocalizedAlias>()
+    private val localizedMisses = ConcurrentHashMap.newKeySet<String>()
+    private val localizedPending = ConcurrentHashMap.newKeySet<String>()
+    private val localizedTargets =
+        ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+    private val sideChannelSequence = AtomicLong()
+
+    private data class LocalizedAlias(
+        val title: String,
+        val artist: String,
+        val album: String,
+    )
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         runCatching {
@@ -56,13 +74,14 @@ class AmToolModule : XposedModule() {
         installSongInfoTranslationCompatibility(loader)
         installLyricsRequestObservationHook(loader)
 
-        // Playback safety: never rewrite Apple Music's native catalog/editorial requests.
-        // Chinese metadata will be reintroduced through a side-channel lookup + model overlay,
-        // not by changing the storefront of the objects that carry playParams.
-        log(Log.INFO, TAG, "native metadata storefront rewrite disabled for playback safety")
+        // Playback-safe metadata localization:
+        // native requests stay on the account storefront; only module-owned side-channel
+        // requests are routed to CN and their returned strings are overlaid on model getters.
+        installSideChannelCatalogExecutorHooks(loader)
+        installLocalizedMetadataOverlay(loader)
 
         installTranslationPreferenceGuard(loader)
-        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3-hotfix2 hooks installed")
+        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3-hotfix3 hooks installed")
     }
 
     private fun installLyricsLanguageHook(loader: ClassLoader) {
@@ -399,6 +418,294 @@ class AmToolModule : XposedModule() {
         }
     }
 
+
+    /**
+     * Routes ONLY AMTool-owned catalog lookups to CN. Native Apple Music requests are never
+     * rewritten, so playParams/availability/entitlement keep the Türkiye account semantics.
+     */
+    private fun installSideChannelCatalogExecutorHooks(loader: ClassLoader) {
+        val methods = AppleMusic653.catalogRequestExecutors(loader)
+        if (methods.isEmpty()) {
+            log(Log.ERROR, TAG, "side-channel executor hooks unavailable")
+            return
+        }
+        methods.forEach { method ->
+            runCatching {
+                hook(method)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                    .intercept { chain ->
+                        val queryIndex = method.parameterTypes.indices.firstOrNull { index ->
+                            index > 3 && Map::class.java.isAssignableFrom(method.parameterTypes[index])
+                        } ?: return@intercept chain.proceed()
+
+                        @Suppress("UNCHECKED_CAST")
+                        val source = chain.args.getOrNull(queryIndex) as? Map<Any?, Any?>
+                            ?: return@intercept chain.proceed()
+                        if (!source.containsKey(SIDE_CHANNEL_TOKEN)) {
+                            return@intercept chain.proceed()
+                        }
+
+                        val args = chain.args.toTypedArray()
+                        val query = LinkedHashMap<Any?, Any?>()
+                        query.putAll(source)
+                        val token = query.remove(SIDE_CHANNEL_TOKEN)?.toString().orEmpty()
+                        query["l"] = SIDE_CHANNEL_LANGUAGE
+                        args[queryIndex] = query
+                        args[3] = SIDE_CHANNEL_STOREFRONT
+
+                        log(
+                            Log.INFO,
+                            TAG,
+                            "side-channel catalog route token=$token " +
+                                "${method.declaringClass.name}#${method.name} -> cn/zh-CN",
+                        )
+                        chain.proceed(args)
+                    }
+            }.onFailure {
+                log(
+                    Log.ERROR,
+                    TAG,
+                    "side-channel executor hook failed ${method.declaringClass.name}#${method.name}",
+                    it,
+                )
+            }
+        }
+        log(Log.INFO, TAG, "side-channel executor hooks installed count=${methods.size}")
+    }
+
+    /**
+     * Display-only overlay. We never mutate the BaseContentItem ID, playParams or storefront.
+     * Getter results are replaced from a CN lookup cache, and notifyChange() is used only to
+     * request a UI rebind after the async lookup completes.
+     */
+    private fun installLocalizedMetadataOverlay(loader: ClassLoader) {
+        val getters = runCatching {
+            AppleMusic653.contentItemGetterMethods(loader)
+        }.onFailure {
+            log(Log.ERROR, TAG, "content item getter resolve failed", it)
+        }.getOrDefault(emptyMap())
+        val identity = runCatching {
+            AppleMusic653.contentItemIdentityMethods(loader)
+        }.getOrDefault(emptyMap())
+        val notifyChange = runCatching {
+            AppleMusic653.contentItemNotifyChange(loader)
+        }.getOrNull()
+
+        if (getters.isEmpty() || identity.isEmpty()) {
+            log(Log.ERROR, TAG, "localized metadata overlay unavailable")
+            return
+        }
+
+        getters.forEach { (name, method) ->
+            runCatching {
+                hook(method)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                    .intercept { chain ->
+                        val original = chain.proceed()
+                        val config = HookConfigRuntime.current()
+                        if (!config.enabled || !config.chineseMetadata) {
+                            return@intercept original
+                        }
+                        val item = chain.thisObject ?: return@intercept original
+                        val mediaId = contentItemMediaId(item, identity)
+                            ?: return@intercept original
+
+                        rememberLocalizedTarget(mediaId, item)
+                        val alias = localizedMetadata[mediaId]
+                        if (alias == null && mediaId !in localizedMisses) {
+                            requestLocalizedMetadata(
+                                loader = loader,
+                                mediaId = mediaId,
+                                notifyChange = notifyChange,
+                            )
+                        }
+
+                        val replacement = when (name) {
+                            "getTitle", "getNowPlayingTitle" -> alias?.title
+                            "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
+                            "getCollectionName" -> alias?.album
+                            else -> null
+                        }?.takeIf(String::isNotBlank)
+
+                        replacement ?: original
+                    }
+                log(Log.INFO, TAG, "display metadata getter overlay installed: $name")
+            }.onFailure {
+                log(Log.ERROR, TAG, "display metadata getter overlay failed: $name", it)
+            }
+        }
+    }
+
+    private fun contentItemMediaId(item: Any, identity: Map<String, Method>): String? {
+        sequenceOf("getSubscriptionStoreId", "getId").forEach { name ->
+            val value = runCatching { identity[name]?.invoke(item)?.toString() }.getOrNull()
+                ?.trim()
+            if (!value.isNullOrEmpty() && value.all(Char::isDigit)) return value
+        }
+        return null
+    }
+
+    private fun rememberLocalizedTarget(mediaId: String, item: Any) {
+        val refs = localizedTargets.computeIfAbsent(mediaId) {
+            Collections.synchronizedList(mutableListOf())
+        }
+        synchronized(refs) {
+            refs.removeAll { it.get() == null || it.get() === item }
+            refs += WeakReference(item)
+            while (refs.size > 24) refs.removeAt(0)
+        }
+    }
+
+    private fun requestLocalizedMetadata(
+        loader: ClassLoader,
+        mediaId: String,
+        notifyChange: Method?,
+    ) {
+        if (!localizedPending.add(mediaId)) return
+        mainHandler.post {
+            runCatching {
+                val access = AppleMusic653.mediaApiAccess(loader)
+                val token = "amtn-${sideChannelSequence.incrementAndGet().toString(36)}-$mediaId"
+                val query = linkedMapOf<String, String>(
+                    "ids" to mediaId,
+                    "l" to SIDE_CHANNEL_LANGUAGE,
+                    "platform" to "android",
+                    "include[songs]" to "artists",
+                    SIDE_CHANNEL_TOKEN to token,
+                )
+                val continuationType = access.directQuery.parameterTypes[2]
+                val context = emptyCoroutineContext(loader, continuationType)
+                val completion = AtomicBoolean(false)
+
+                fun complete(response: Any?) {
+                    if (!completion.compareAndSet(false, true)) return
+                    localizedPending.remove(mediaId)
+                    val alias = parseLocalizedAlias(response, mediaId)
+                    if (alias == null) {
+                        localizedMisses += mediaId
+                        log(Log.INFO, TAG, "side-channel metadata miss id=$mediaId")
+                        return
+                    }
+                    localizedMetadata[mediaId] = alias
+                    localizedMisses.remove(mediaId)
+                    log(
+                        Log.INFO,
+                        TAG,
+                        "side-channel metadata hit id=$mediaId " +
+                            "title=${alias.title} artist=${alias.artist} album=${alias.album}",
+                    )
+                    notifyLocalizedTargets(mediaId, notifyChange)
+                }
+
+                val continuation = Proxy.newProxyInstance(
+                    continuationType.classLoader ?: loader,
+                    arrayOf(continuationType),
+                ) { proxy, method, args ->
+                    when (method.name) {
+                        "getContext" -> context
+                        "resumeWith" -> {
+                            val result = args?.firstOrNull()
+                            if (result?.javaClass?.name != "kotlin.Result\$Failure") {
+                                complete(result)
+                            } else {
+                                localizedPending.remove(mediaId)
+                            }
+                            null
+                        }
+                        "equals" -> proxy === args?.firstOrNull()
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "toString" -> "AMToolMetadataContinuation($mediaId)"
+                        else -> null
+                    }
+                }
+
+                val immediate = access.directQuery.invoke(
+                    access.mediaApi,
+                    "songs",
+                    query,
+                    continuation,
+                )
+                if (!isCoroutineSuspended(immediate)) {
+                    complete(immediate)
+                }
+            }.onFailure {
+                localizedPending.remove(mediaId)
+                log(Log.ERROR, TAG, "side-channel metadata lookup failed id=$mediaId", it)
+            }
+        }
+    }
+
+    private fun parseLocalizedAlias(response: Any?, requestedId: String): LocalizedAlias? {
+        response ?: return null
+        val data = callMember(response, "getData")
+        val entities = when (data) {
+            is Array<*> -> data.filterNotNull()
+            is Iterable<*> -> data.filterNotNull()
+            is Map<*, *> -> data.values.filterNotNull()
+            else -> emptyList()
+        }
+        val entity = entities.firstOrNull { candidate ->
+            callMember(candidate, "getId")?.toString() == requestedId
+        } ?: entities.firstOrNull() ?: return null
+        val attributes = callMember(entity, "getAttributes") ?: return null
+        val title = (callMember(attributes, "getName") as? String).orEmpty().trim()
+        val artist = (callMember(attributes, "getArtistName") as? String).orEmpty().trim()
+        val album = (callMember(attributes, "getAlbumName") as? String).orEmpty().trim()
+        if (title.isEmpty() && artist.isEmpty() && album.isEmpty()) return null
+        return LocalizedAlias(title, artist, album)
+    }
+
+    private fun notifyLocalizedTargets(mediaId: String, notifyChange: Method?) {
+        notifyChange ?: return
+        val refs = localizedTargets[mediaId] ?: return
+        mainHandler.post {
+            synchronized(refs) {
+                refs.removeAll { ref ->
+                    val item = ref.get()
+                    if (item == null) {
+                        true
+                    } else {
+                        runCatching { notifyChange.invoke(item) }
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    private fun emptyCoroutineContext(loader: ClassLoader, continuationType: Class<*>): Any {
+        runCatching {
+            val type = Class.forName("kotlin.coroutines.EmptyCoroutineContext", false, loader)
+            return type.getField("INSTANCE").get(null)
+        }
+        val getContext = continuationType.methods.firstOrNull {
+            it.name == "getContext" && it.parameterCount == 0
+        } ?: error("Continuation#getContext unavailable")
+        val contextType = getContext.returnType
+        return Proxy.newProxyInstance(
+            contextType.classLoader ?: loader,
+            arrayOf(contextType),
+        ) { proxy, method, args ->
+            when (method.name) {
+                "fold" -> args?.firstOrNull()
+                "get" -> null
+                "minusKey" -> proxy
+                "plus" -> args?.firstOrNull()
+                "equals" -> proxy === args?.firstOrNull()
+                "hashCode" -> 0
+                "toString" -> "EmptyCoroutineContext"
+                else -> null
+            }
+        }
+    }
+
+    private fun isCoroutineSuspended(value: Any?): Boolean {
+        if (value == null) return false
+        return value.toString() == "COROUTINE_SUSPENDED" ||
+            value.javaClass.name.contains("CoroutineSingletons") &&
+                value.toString().contains("COROUTINE_SUSPENDED")
+    }
+
     private fun installTranslationPreferenceGuard(loader: ClassLoader) {
         val setter = AppleMusic653.translationSetter(loader) ?: return
         runCatching {
@@ -561,5 +868,8 @@ class AmToolModule : XposedModule() {
 
     companion object {
         private const val TAG = "AMToolNext"
+        private const val SIDE_CHANNEL_STOREFRONT = "cn"
+        private const val SIDE_CHANNEL_LANGUAGE = "zh-CN"
+        private const val SIDE_CHANNEL_TOKEN = "amtool_localized_request"
     }
 }
