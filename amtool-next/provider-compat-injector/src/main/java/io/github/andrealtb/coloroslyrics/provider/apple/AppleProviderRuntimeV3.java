@@ -44,6 +44,7 @@ final class AppleProviderRuntimeV3 {
     private static final long LEASE_PAST_MS = 750L;
     private static final long LEASE_FUTURE_MS = 2_500L;
     private static final long TASK_PROBE_DELAY_MS = 1_200L;
+    private static final int TASK_REMOVAL_CONFIRMATIONS = 2;
 
     private static final class CanonicalTrack {
         final String id;
@@ -107,6 +108,7 @@ final class AppleProviderRuntimeV3 {
 
     private boolean hostTaskPresent = true;
     private boolean taskProbeScheduled;
+    private int emptyTaskProbeCount;
 
     private final WeakHashMap<MediaSession, SessionState> sessions = new WeakHashMap<>();
     private final LinkedHashMap<String, Object> playbackItems =
@@ -388,16 +390,27 @@ final class AppleProviderRuntimeV3 {
         }
 
         if (!hasHostTask()) {
-            onHostTaskRemoved("appTasks-empty");
+            boolean confirmedRemoved;
+            synchronized (lock) {
+                emptyTaskProbeCount++;
+                confirmedRemoved = emptyTaskProbeCount >= TASK_REMOVAL_CONFIRMATIONS;
+                shouldContinue = !confirmedRemoved &&
+                        startedActivities.isEmpty() &&
+                        hostTaskPresent;
+            }
+            if (confirmedRemoved) {
+                onHostTaskRemoved("appTasks-empty-confirmed");
+                return;
+            }
+            if (shouldContinue) scheduleTaskPresenceProbe();
             return;
         }
 
         synchronized (lock) {
+            emptyTaskProbeCount = 0;
             shouldContinue = startedActivities.isEmpty() && hostTaskPresent;
         }
-        if (shouldContinue) {
-            scheduleTaskPresenceProbe();
-        }
+        if (shouldContinue) scheduleTaskPresenceProbe();
     }
 
     private boolean hasHostTask() {
@@ -436,6 +449,7 @@ final class AppleProviderRuntimeV3 {
             resumed = !hostTaskPresent;
             hostTaskPresent = true;
             taskProbeScheduled = false;
+            emptyTaskProbeCount = 0;
             if (resumed) {
                 lyricGate.invalidateCurrent();
                 leaseEpoch++;
@@ -456,6 +470,7 @@ final class AppleProviderRuntimeV3 {
             changed = hostTaskPresent;
             hostTaskPresent = false;
             taskProbeScheduled = false;
+            emptyTaskProbeCount = 0;
 
             lyricGate.invalidateCurrent();
             readyLines = null;
