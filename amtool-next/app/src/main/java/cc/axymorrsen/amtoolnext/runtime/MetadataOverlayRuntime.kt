@@ -39,9 +39,7 @@ internal class MetadataOverlayRuntime(
 
     private data class AttributeSnapshot(
         val attributes: Any,
-        val name: String?,
-        val artist: String?,
-        val album: String?,
+        val name: String,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -314,23 +312,21 @@ internal class MetadataOverlayRuntime(
         alias: CatalogSideChannel.Alias,
     ): AttributeSnapshot? {
         val attributes = AppleMusic653.mediaEntityAttributes(entity) ?: return null
-        val snapshot = AttributeSnapshot(
-            attributes = attributes,
-            name = callString(attributes, "getName"),
-            artist = callString(attributes, "getArtistName"),
-            album = callString(attributes, "getAlbumName"),
-        )
+        val originalName = callString(attributes, "getName")
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        val localizedName = alias.title.trim().takeIf(String::isNotEmpty)
+            ?: return null
+        if (!setString(attributes, "setName", localizedName)) return null
 
-        setString(attributes, "setName", alias.title)
-        setString(attributes, "setArtistName", alias.artist)
-        setString(attributes, "setAlbumName", alias.album)
-        return snapshot
+        return AttributeSnapshot(
+            attributes = attributes,
+            name = originalName,
+        )
     }
 
     private fun restoreEntity(snapshot: AttributeSnapshot) {
-        setStringAllowBlank(snapshot.attributes, "setName", snapshot.name)
-        setStringAllowBlank(snapshot.attributes, "setArtistName", snapshot.artist)
-        setStringAllowBlank(snapshot.attributes, "setAlbumName", snapshot.album)
+        setString(snapshot.attributes, "setName", snapshot.name)
     }
 
     private fun applyTopSongModelAlias(
@@ -368,12 +364,8 @@ internal class MetadataOverlayRuntime(
         return null
     }
 
-    private fun setString(instance: Any, name: String, value: String?) {
-        val clean = value?.trim()?.takeIf(String::isNotEmpty) ?: return
-        setStringAllowBlank(instance, name, clean)
-    }
-
-    private fun setStringAllowBlank(instance: Any, name: String, value: String?) {
+    private fun setString(instance: Any, name: String, value: String?): Boolean {
+        val clean = value?.trim()?.takeIf(String::isNotEmpty) ?: return false
         var type: Class<*>? = instance.javaClass
         while (type != null) {
             type.declaredMethods.firstOrNull { method ->
@@ -381,14 +373,15 @@ internal class MetadataOverlayRuntime(
                     method.parameterCount == 1 &&
                     method.parameterTypes[0] == String::class.java
             }?.let { method ->
-                runCatching {
+                return runCatching {
                     method.isAccessible = true
-                    method.invoke(instance, value)
-                }
-                return
+                    method.invoke(instance, clean)
+                    true
+                }.getOrDefault(false)
             }
             type = type.superclass
         }
+        return false
     }
 
     companion object {
