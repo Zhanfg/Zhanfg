@@ -11,9 +11,20 @@ import io.github.libxposed.api.XposedModule
 import java.lang.ref.WeakReference
 import java.lang.reflect.Method
 import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * Display-only localized metadata projection.
+ *
+ * V3 alpha1 only hooked BaseContentItem-style getters. Apple Music 6.5.3's artist Top Songs
+ * page has already copied those values into an Epoxy model (music.e1) before render, so getter
+ * replacement alone cannot change the visible row. alpha2 owns that exact consumption seam too:
+ * the builder identifies the MediaEntity, and the binder projects the resolved alias into e1.L.
+ *
+ * Canonical Apple IDs, playParams, MediaEntity attributes and playback objects are never mutated.
+ */
 internal class MetadataOverlayRuntime(
     private val module: XposedModule,
     private val loader: ClassLoader,
@@ -30,9 +41,23 @@ internal class MetadataOverlayRuntime(
     private val main = Handler(Looper.getMainLooper())
     private val sequence = AtomicLong()
     private val state = ConcurrentHashMap<String, State>()
-    private val targets = ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+
+    private val contentTargets =
+        ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+
+    private val topSongModels =
+        Collections.synchronizedMap(WeakHashMap<Any, String>())
+    private val topSongControllers =
+        ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+
+    private var topSongSurface: AppleMusic653.ArtistTopSongSurface? = null
 
     fun install() {
+        installContentItemProjection()
+        installArtistTopSongsProjection()
+    }
+
+    private fun installContentItemProjection() {
         val classes = AppleMusic653.contentItemRuntimeClasses(loader)
         val hooked = HashSet<Method>()
 
@@ -46,30 +71,13 @@ internal class MetadataOverlayRuntime(
                     .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                     .intercept { chain ->
                         val original = chain.proceed()
-                        if (!HookConfigRuntime.current().let { it.enabled && it.chineseMetadata }) {
-                            return@intercept original
-                        }
+                        if (!metadataEnabled()) return@intercept original
 
                         val item = chain.thisObject ?: return@intercept original
                         val mediaId = canonicalId(item, identity) ?: return@intercept original
-                        remember(mediaId, item)
+                        rememberContentTarget(mediaId, item)
 
-                        val alias = when (val current = state[mediaId] ?: State.Unknown) {
-                            is State.Hit -> current.alias
-                            is State.Miss -> {
-                                if (SystemClock.uptimeMillis() >= current.untilUptime) {
-                                    state.remove(mediaId, current)
-                                    request(mediaId, notify)
-                                }
-                                null
-                            }
-                            State.Unknown -> {
-                                request(mediaId, notify)
-                                null
-                            }
-                            is State.Loading -> null
-                        }
-
+                        val alias = aliasOrRequest(mediaId, notify)
                         val replacement = when (name) {
                             "getTitle", "getNowPlayingTitle" -> alias?.title
                             "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
@@ -84,9 +92,97 @@ internal class MetadataOverlayRuntime(
 
         logger(
             Log.INFO,
-            "metadata overlay installed classes=${classes.size} methods=${hooked.size}",
+            "content-item metadata projection installed classes=${classes.size} methods=${hooked.size}",
             null,
         )
+    }
+
+    /**
+     * Exact 6.5.3 artist-page consumption path:
+     *
+     * BaseProfileEpoxyController#addSwipingChartItemA2("top-songs", MediaEntity, ...)
+     *      -> com.apple.android.music.e1
+     * e1#L = title
+     * e1#a(position, holder) = visible bind
+     *
+     * We never alter MediaEntity itself. The Epoxy model is a disposable display projection.
+     */
+    private fun installArtistTopSongsProjection() {
+        runCatching {
+            val surface = AppleMusic653.artistTopSongSurface(loader)
+            topSongSurface = surface
+
+            module.hook(surface.buildMethod)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept { chain ->
+                    val model = chain.proceed()
+                    if (!metadataEnabled() || model == null) return@intercept model
+                    if (chain.args.getOrNull(0)?.toString() != "top-songs") {
+                        return@intercept model
+                    }
+
+                    val entity = chain.args.getOrNull(1) ?: return@intercept model
+                    val mediaId = AppleMusic653.mediaEntityCatalogId(entity)
+                        ?: return@intercept model
+
+                    topSongModels[model] = mediaId
+                    chain.thisObject?.let { rememberTopSongController(mediaId, it) }
+
+                    aliasOrRequest(mediaId, notify = null)?.let { alias ->
+                        applyTopSongAlias(model, alias)
+                    }
+                    model
+                }
+
+            module.hook(surface.bindMethod)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept { chain ->
+                    if (metadataEnabled()) {
+                        val model = chain.thisObject
+                        val mediaId = model?.let { topSongModels[it] }
+                        if (model != null && mediaId != null) {
+                            aliasOrRequest(mediaId, notify = null)?.let { alias ->
+                                applyTopSongAlias(model, alias)
+                            }
+                        }
+                    }
+                    chain.proceed()
+                }
+
+            logger(
+                Log.INFO,
+                "artist Top Songs projection installed builder=" +
+                    "${surface.buildMethod.declaringClass.name}#${surface.buildMethod.name}, " +
+                    "binder=${surface.bindMethod.declaringClass.name}#${surface.bindMethod.name}",
+                null,
+            )
+        }.onFailure { error ->
+            logger(Log.ERROR, "artist Top Songs projection failed", error)
+        }
+    }
+
+    private fun metadataEnabled(): Boolean =
+        HookConfigRuntime.current().let { it.enabled && it.chineseMetadata }
+
+    private fun aliasOrRequest(
+        mediaId: String,
+        notify: Method?,
+    ): CatalogSideChannel.Alias? {
+        return when (val current = state[mediaId] ?: State.Unknown) {
+            is State.Hit -> current.alias
+            is State.Loading -> null
+            is State.Miss -> {
+                if (SystemClock.uptimeMillis() >= current.untilUptime) {
+                    state.remove(mediaId, current)
+                    request(mediaId, notify)
+                }
+                null
+            }
+            State.Unknown -> {
+                request(mediaId, notify)
+                null
+            }
+        }
     }
 
     private fun request(mediaId: String, notify: Method?) {
@@ -102,7 +198,18 @@ internal class MetadataOverlayRuntime(
             } else {
                 State.Hit(alias)
             }
-            if (alias != null) notifyTargets(mediaId, notify)
+
+            if (alias != null) {
+                notifyContentTargets(mediaId, notify)
+                refreshTopSongTargets(mediaId, alias)
+                logger(
+                    Log.INFO,
+                    "localized metadata resolved id=$mediaId title=${alias.title}",
+                    null,
+                )
+            } else {
+                logger(Log.INFO, "localized metadata miss id=$mediaId", null)
+            }
         }
     }
 
@@ -116,8 +223,8 @@ internal class MetadataOverlayRuntime(
         return null
     }
 
-    private fun remember(mediaId: String, item: Any) {
-        val refs = targets.computeIfAbsent(mediaId) {
+    private fun rememberContentTarget(mediaId: String, item: Any) {
+        val refs = contentTargets.computeIfAbsent(mediaId) {
             Collections.synchronizedList(mutableListOf())
         }
         synchronized(refs) {
@@ -127,9 +234,20 @@ internal class MetadataOverlayRuntime(
         }
     }
 
-    private fun notifyTargets(mediaId: String, notify: Method?) {
+    private fun rememberTopSongController(mediaId: String, controller: Any) {
+        val refs = topSongControllers.computeIfAbsent(mediaId) {
+            Collections.synchronizedList(mutableListOf())
+        }
+        synchronized(refs) {
+            refs.removeAll { it.get() == null || it.get() === controller }
+            refs += WeakReference(controller)
+            while (refs.size > MAX_CONTROLLERS) refs.removeAt(0)
+        }
+    }
+
+    private fun notifyContentTargets(mediaId: String, notify: Method?) {
         notify ?: return
-        val refs = targets[mediaId] ?: return
+        val refs = contentTargets[mediaId] ?: return
         main.post {
             synchronized(refs) {
                 refs.removeAll { ref ->
@@ -145,8 +263,82 @@ internal class MetadataOverlayRuntime(
         }
     }
 
+    private fun applyTopSongAlias(
+        model: Any,
+        alias: CatalogSideChannel.Alias,
+    ): Boolean {
+        val surface = topSongSurface ?: return false
+        val title = alias.title.trim()
+        if (title.isEmpty()) return false
+        return runCatching {
+            if (surface.titleField.get(model)?.toString() != title) {
+                surface.titleField.set(model, title)
+                true
+            } else {
+                false
+            }
+        }.onFailure { error ->
+            logger(Log.ERROR, "artist Top Songs title projection failed", error)
+        }.getOrDefault(false)
+    }
+
+    private fun refreshTopSongTargets(
+        mediaId: String,
+        alias: CatalogSideChannel.Alias,
+    ) {
+        main.post {
+            var changed = false
+            synchronized(topSongModels) {
+                topSongModels.entries.forEach { (model, id) ->
+                    if (id == mediaId) {
+                        changed = applyTopSongAlias(model, alias) || changed
+                    }
+                }
+            }
+
+            val controllers = topSongControllers[mediaId]
+            if (controllers != null) {
+                synchronized(controllers) {
+                    controllers.removeAll { ref ->
+                        val controller = ref.get()
+                        if (controller == null) {
+                            true
+                        } else {
+                            requestModelBuild(controller)
+                            false
+                        }
+                    }
+                }
+            }
+
+            if (changed) {
+                logger(Log.INFO, "artist Top Songs rebound id=$mediaId title=${alias.title}", null)
+            }
+        }
+    }
+
+    private fun requestModelBuild(controller: Any) {
+        var type: Class<*>? = controller.javaClass
+        while (type != null) {
+            val method = type.declaredMethods.firstOrNull { candidate ->
+                candidate.name == "requestModelBuild" && candidate.parameterCount == 0
+            }
+            if (method != null) {
+                runCatching {
+                    method.isAccessible = true
+                    method.invoke(controller)
+                }.onFailure { error ->
+                    logger(Log.ERROR, "artist controller requestModelBuild failed", error)
+                }
+                return
+            }
+            type = type.superclass
+        }
+    }
+
     companion object {
         private const val MISS_TTL_MS = 10 * 60 * 1000L
         private const val MAX_TARGETS = 24
+        private const val MAX_CONTROLLERS = 8
     }
 }
