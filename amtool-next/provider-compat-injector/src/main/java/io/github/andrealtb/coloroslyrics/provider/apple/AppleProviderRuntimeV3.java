@@ -290,10 +290,11 @@ final class AppleProviderRuntimeV3 {
                         );
                     }
 
-                    if (isTerminalPlaybackState(value)) {
-                        invalidatePublication();
-                        clearOwnedLyricsFromSession(session);
-                    }
+                    // PlaybackState is observation-only. Apple may transiently report
+                    // STOPPED/NONE during route, decoder or audio-variant hand-off; writing
+                    // MediaSession metadata from that edge can freeze the active pipeline.
+                    // Definitive cleanup belongs to release/task-removal, while a real track
+                    // change is cleaned in the next Apple-owned setMetadata carrier.
                     return result;
                 });
 
