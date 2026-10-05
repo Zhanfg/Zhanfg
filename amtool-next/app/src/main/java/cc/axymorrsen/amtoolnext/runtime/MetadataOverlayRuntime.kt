@@ -4,29 +4,25 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.view.View
-import android.view.ViewGroup
-import android.widget.TextView
 import cc.axymorrsen.amtoolnext.config.HookConfigRuntime
 import cc.axymorrsen.amtoolnext.hook.AppleMusic653
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.ref.WeakReference
 import java.lang.reflect.Method
-import java.util.ArrayDeque
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Display-only localized metadata projection.
+ * Localized metadata projection for Apple Music 6.5.3.
  *
- * alpha3 owns both the data/model seam and the final visible-row seam for Artist Top Songs.
- * The latter matters because Apple Music's Epoxy/DataBinding pipeline can re-copy the original
- * title after the model getter hooks have already returned.
- *
- * Canonical Apple objects, IDs, playParams and playback fields are never mutated.
+ * The visible Artist/Top Songs row is built synchronously from MediaEntity attributes. We do not
+ * scan holder view trees or intercept every bind anymore. When an alias is cached we temporarily
+ * project it into MediaEntity attributes for exactly one model-build call, then restore the
+ * canonical object immediately. On an async cache fill we debounce one Epoxy rebuild per
+ * controller, so four songs produce one rebuild instead of four full-page rebuilds.
  */
 internal class MetadataOverlayRuntime(
     private val module: XposedModule,
@@ -41,9 +37,11 @@ internal class MetadataOverlayRuntime(
         data class Miss(val untilUptime: Long) : State
     }
 
-    private data class TopSongSnapshot(
-        val mediaId: String,
-        val originalTitle: String?,
+    private data class AttributeSnapshot(
+        val attributes: Any,
+        val name: String?,
+        val artist: String?,
+        val album: String?,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -54,10 +52,10 @@ internal class MetadataOverlayRuntime(
         ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
     private val contentNotifyMethods = ConcurrentHashMap<String, Method>()
 
-    private val topSongModels =
-        Collections.synchronizedMap(WeakHashMap<Any, TopSongSnapshot>())
-    private val topSongRoots =
-        ConcurrentHashMap<String, MutableList<WeakReference<View>>>()
+    private val topSongControllers =
+        ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+    private val pendingControllerRebuilds =
+        Collections.synchronizedMap(WeakHashMap<Any, Runnable>())
 
     @Volatile
     private var topSongSurface: AppleMusic653.ArtistTopSongSurface? = null
@@ -89,7 +87,7 @@ internal class MetadataOverlayRuntime(
                         rememberContentTarget(mediaId, item)
                         if (notify != null) contentNotifyMethods[mediaId] = notify
 
-                        val alias = aliasOrRequest(mediaId)
+                        val alias = aliasOrRequest(mediaId, isrcHint = null)
                         val replacement = when (name) {
                             "getTitle", "getNowPlayingTitle" -> alias?.title
                             "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
@@ -117,58 +115,36 @@ internal class MetadataOverlayRuntime(
             module.hook(surface.buildMethod)
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept { chain ->
-                    val model = chain.proceed()
-                    if (!metadataEnabled() || model == null) return@intercept model
+                    if (!metadataEnabled()) return@intercept chain.proceed()
                     if (chain.args.getOrNull(0)?.toString() != "top-songs") {
-                        return@intercept model
+                        return@intercept chain.proceed()
                     }
 
-                    val entity = chain.args.getOrNull(1) ?: return@intercept model
+                    val entity = chain.args.getOrNull(1) ?: return@intercept chain.proceed()
                     val mediaId = AppleMusic653.mediaEntityCatalogId(entity)
-                        ?: return@intercept model
+                        ?: return@intercept chain.proceed()
+                    val isrc = AppleMusic653.mediaEntityIsrc(entity)
+                    chain.thisObject?.let { rememberTopSongController(mediaId, it) }
 
-                    val originalTitle = runCatching {
-                        surface.titleField.get(model)?.toString()?.trim()
-                    }.getOrNull()?.takeIf(String::isNotEmpty)
+                    val alias = aliasOrRequest(mediaId, isrc)
+                        ?: return@intercept chain.proceed()
 
-                    topSongModels[model] = TopSongSnapshot(mediaId, originalTitle)
-
-                    aliasOrRequest(mediaId)?.let { alias ->
-                        applyTopSongModelAlias(model, alias)
+                    val snapshot = projectEntity(entity, alias)
+                    val model = try {
+                        chain.proceed()
+                    } finally {
+                        snapshot?.let(::restoreEntity)
                     }
+
+                    // Verified 6.5.3 fallback. It is executed once per model build, never per bind.
+                    if (model != null) applyTopSongModelAlias(model, alias)
                     model
-                }
-
-            module.hook(surface.bindMethod)
-                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                .intercept { chain ->
-                    val model = chain.thisObject
-                    if (metadataEnabled() && model != null) {
-                        val snapshot = topSongModels[model]
-                        val alias = snapshot?.mediaId?.let(::aliasOrRequest)
-                        if (alias != null) applyTopSongModelAlias(model, alias)
-                    }
-
-                    val result = chain.proceed()
-
-                    if (metadataEnabled() && model != null) {
-                        val snapshot = topSongModels[model]
-                        val root = rootViewFromHolder(chain.args.getOrNull(1))
-                        if (snapshot != null && root != null) {
-                            rememberTopSongRoot(snapshot.mediaId, root)
-                            aliasOrRequest(snapshot.mediaId)?.let { alias ->
-                                applyVisibleTopSongTitle(root, snapshot.originalTitle, alias.title)
-                            }
-                        }
-                    }
-                    result
                 }
 
             logger(
                 Log.INFO,
-                "artist Top Songs alpha3 projection installed builder=" +
-                    "${surface.buildMethod.declaringClass.name}#${surface.buildMethod.name}, " +
-                    "binder=${surface.bindMethod.declaringClass.name}#${surface.bindMethod.name}",
+                "artist Top Songs projection installed at model-build seam=" +
+                    "${surface.buildMethod.declaringClass.name}#${surface.buildMethod.name}",
                 null,
             )
         }.onFailure { error ->
@@ -179,28 +155,31 @@ internal class MetadataOverlayRuntime(
     private fun metadataEnabled(): Boolean =
         HookConfigRuntime.current().let { it.enabled && it.chineseMetadata }
 
-    private fun aliasOrRequest(mediaId: String): CatalogSideChannel.Alias? {
+    private fun aliasOrRequest(
+        mediaId: String,
+        isrcHint: String?,
+    ): CatalogSideChannel.Alias? {
         return when (val current = state[mediaId] ?: State.Unknown) {
             is State.Hit -> current.alias
             is State.Loading -> null
             is State.Miss -> {
                 if (SystemClock.uptimeMillis() >= current.untilUptime) {
-                    if (state.remove(mediaId, current)) request(mediaId)
+                    if (state.remove(mediaId, current)) request(mediaId, isrcHint)
                 }
                 null
             }
             State.Unknown -> {
-                request(mediaId)
+                request(mediaId, isrcHint)
                 null
             }
         }
     }
 
-    private fun request(mediaId: String) {
+    private fun request(mediaId: String, isrcHint: String?) {
         val id = sequence.incrementAndGet()
         if (state.putIfAbsent(mediaId, State.Loading(id)) != null) return
 
-        catalog.resolve(mediaId) { alias ->
+        catalog.resolve(mediaId, isrcHint) { alias ->
             val expected = state[mediaId] as? State.Loading
             if (expected?.request != id) return@resolve
 
@@ -211,15 +190,19 @@ internal class MetadataOverlayRuntime(
             }
 
             if (alias == null) {
-                logger(Log.INFO, "localized metadata miss id=$mediaId", null)
+                logger(
+                    Log.INFO,
+                    "localized metadata miss id=$mediaId isrc=${isrcHint ?: "unknown"}",
+                    null,
+                )
                 return@resolve
             }
 
             notifyContentTargets(mediaId)
-            refreshTopSongTargets(mediaId, alias)
+            refreshTopSongControllers(mediaId)
             logger(
                 Log.INFO,
-                "localized metadata applied id=$mediaId title=${alias.title}",
+                "localized metadata resolved id=$mediaId title=${alias.title}",
                 null,
             )
         }
@@ -265,13 +248,97 @@ internal class MetadataOverlayRuntime(
         }
     }
 
+    private fun rememberTopSongController(mediaId: String, controller: Any) {
+        val refs = topSongControllers.computeIfAbsent(mediaId) {
+            Collections.synchronizedList(mutableListOf())
+        }
+        synchronized(refs) {
+            refs.removeAll { it.get() == null || it.get() === controller }
+            refs += WeakReference(controller)
+            while (refs.size > MAX_CONTROLLERS) refs.removeAt(0)
+        }
+    }
+
+    private fun refreshTopSongControllers(mediaId: String) {
+        val refs = topSongControllers[mediaId] ?: return
+        main.post {
+            synchronized(refs) {
+                refs.removeAll { ref ->
+                    val controller = ref.get()
+                    if (controller == null) {
+                        true
+                    } else {
+                        scheduleModelBuild(controller)
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    private fun scheduleModelBuild(controller: Any) {
+        val next = Runnable {
+            synchronized(pendingControllerRebuilds) {
+                pendingControllerRebuilds.remove(controller)
+            }
+            requestModelBuild(controller)
+        }
+
+        synchronized(pendingControllerRebuilds) {
+            pendingControllerRebuilds.remove(controller)?.let(main::removeCallbacks)
+            pendingControllerRebuilds[controller] = next
+        }
+        main.postDelayed(next, MODEL_REBUILD_DEBOUNCE_MS)
+    }
+
+    private fun requestModelBuild(controller: Any) {
+        var type: Class<*>? = controller.javaClass
+        while (type != null) {
+            type.declaredMethods.firstOrNull { method ->
+                method.name == "requestModelBuild" && method.parameterCount == 0
+            }?.let { method ->
+                runCatching {
+                    method.isAccessible = true
+                    method.invoke(controller)
+                }.onFailure { error ->
+                    logger(Log.ERROR, "artist controller requestModelBuild failed", error)
+                }
+                return
+            }
+            type = type.superclass
+        }
+    }
+
+    private fun projectEntity(
+        entity: Any,
+        alias: CatalogSideChannel.Alias,
+    ): AttributeSnapshot? {
+        val attributes = AppleMusic653.mediaEntityAttributes(entity) ?: return null
+        val snapshot = AttributeSnapshot(
+            attributes = attributes,
+            name = callString(attributes, "getName"),
+            artist = callString(attributes, "getArtistName"),
+            album = callString(attributes, "getAlbumName"),
+        )
+
+        setString(attributes, "setName", alias.title)
+        setString(attributes, "setArtistName", alias.artist)
+        setString(attributes, "setAlbumName", alias.album)
+        return snapshot
+    }
+
+    private fun restoreEntity(snapshot: AttributeSnapshot) {
+        setStringAllowBlank(snapshot.attributes, "setName", snapshot.name)
+        setStringAllowBlank(snapshot.attributes, "setArtistName", snapshot.artist)
+        setStringAllowBlank(snapshot.attributes, "setAlbumName", snapshot.album)
+    }
+
     private fun applyTopSongModelAlias(
         model: Any,
         alias: CatalogSideChannel.Alias,
     ): Boolean {
         val surface = topSongSurface ?: return false
-        val title = alias.title.trim()
-        if (title.isEmpty()) return false
+        val title = alias.title.trim().takeIf(String::isNotEmpty) ?: return false
 
         return runCatching {
             if (surface.titleField.get(model)?.toString()?.trim() == title) {
@@ -285,143 +352,49 @@ internal class MetadataOverlayRuntime(
         }.getOrDefault(false)
     }
 
-    private fun rememberTopSongRoot(mediaId: String, root: View) {
-        val refs = topSongRoots.computeIfAbsent(mediaId) {
-            Collections.synchronizedList(mutableListOf())
-        }
-        synchronized(refs) {
-            refs.removeAll { it.get() == null || it.get() === root }
-            refs += WeakReference(root)
-            while (refs.size > MAX_VISIBLE_ROOTS) refs.removeAt(0)
-        }
-    }
-
-    private fun refreshTopSongTargets(
-        mediaId: String,
-        alias: CatalogSideChannel.Alias,
-    ) {
-        main.post {
-            synchronized(topSongModels) {
-                topSongModels.entries.forEach { (model, snapshot) ->
-                    if (snapshot.mediaId == mediaId) {
-                        applyTopSongModelAlias(model, alias)
-                    }
-                }
-            }
-
-            val roots = topSongRoots[mediaId]
-            if (roots != null) {
-                synchronized(roots) {
-                    roots.removeAll { ref ->
-                        val root = ref.get()
-                        if (root == null) {
-                            true
-                        } else {
-                            val originalTitle = synchronized(topSongModels) {
-                                topSongModels.values
-                                    .firstOrNull { it.mediaId == mediaId }
-                                    ?.originalTitle
-                            }
-                            applyVisibleTopSongTitle(root, originalTitle, alias.title)
-                            false
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Final visual fallback for the 6.5.3 Epoxy/DataBinding row. This only touches text equal to
-     * the captured original song title inside the already-associated Top Songs holder.
-     */
-    private fun applyVisibleTopSongTitle(
-        root: View,
-        originalTitle: String?,
-        localizedTitle: String,
-    ): Boolean {
-        val original = originalTitle?.trim()?.takeIf(String::isNotEmpty) ?: return false
-        val localized = localizedTitle.trim().takeIf(String::isNotEmpty) ?: return false
-        if (original == localized) return false
-
-        val queue = ArrayDeque<View>()
-        queue.add(root)
-        var visited = 0
-
-        while (queue.isNotEmpty() && visited < MAX_VIEW_SCAN) {
-            val view = queue.removeFirst()
-            visited++
-
-            if (view is TextView && view.text?.toString()?.trim() == original) {
-                view.text = localized
-                return true
-            }
-
-            if (view is ViewGroup) {
-                for (index in 0 until view.childCount) {
-                    queue.addLast(view.getChildAt(index))
-                }
-            }
-        }
-        return false
-    }
-
-    private fun rootViewFromHolder(holder: Any?): View? {
-        holder ?: return null
-        if (holder is View) return holder
-
-        val preferredMethods = listOf("getItemView", "getRoot", "getView")
-        preferredMethods.forEach { name ->
-            findZeroArgMethod(holder.javaClass, name)?.let { method ->
-                val value = runCatching { method.invoke(holder) }.getOrNull()
-                if (value is View) return value
-                value?.let(::viewFromBindingLike)?.let { return it }
-            }
-        }
-
-        var type: Class<*>? = holder.javaClass
+    private fun callString(instance: Any, name: String): String? {
+        var type: Class<*>? = instance.javaClass
         while (type != null) {
-            type.declaredFields.forEach { field ->
-                runCatching {
-                    field.isAccessible = true
-                    val value = field.get(holder)
-                    when (value) {
-                        is View -> return value
-                        null -> Unit
-                        else -> viewFromBindingLike(value)?.let { return it }
-                    }
-                }
+            type.declaredMethods.firstOrNull { method ->
+                method.name == name && method.parameterCount == 0
+            }?.let { method ->
+                return runCatching {
+                    method.isAccessible = true
+                    method.invoke(instance) as? String
+                }.getOrNull()
             }
             type = type.superclass
         }
         return null
     }
 
-    private fun viewFromBindingLike(instance: Any): View? {
-        findZeroArgMethod(instance.javaClass, "getRoot")?.let { method ->
-            return runCatching { method.invoke(instance) as? View }.getOrNull()
-        }
-        return null
+    private fun setString(instance: Any, name: String, value: String?) {
+        val clean = value?.trim()?.takeIf(String::isNotEmpty) ?: return
+        setStringAllowBlank(instance, name, clean)
     }
 
-    private fun findZeroArgMethod(type: Class<*>, name: String): Method? {
-        var current: Class<*>? = type
-        while (current != null) {
-            current.declaredMethods.firstOrNull {
-                it.name == name && it.parameterCount == 0
-            }?.let {
-                it.isAccessible = true
-                return it
+    private fun setStringAllowBlank(instance: Any, name: String, value: String?) {
+        var type: Class<*>? = instance.javaClass
+        while (type != null) {
+            type.declaredMethods.firstOrNull { method ->
+                method.name == name &&
+                    method.parameterCount == 1 &&
+                    method.parameterTypes[0] == String::class.java
+            }?.let { method ->
+                runCatching {
+                    method.isAccessible = true
+                    method.invoke(instance, value)
+                }
+                return
             }
-            current = current.superclass
+            type = type.superclass
         }
-        return null
     }
 
     companion object {
         private const val MISS_TTL_MS = 2 * 60 * 1000L
         private const val MAX_CONTENT_TARGETS = 24
-        private const val MAX_VISIBLE_ROOTS = 12
-        private const val MAX_VIEW_SCAN = 96
+        private const val MAX_CONTROLLERS = 8
+        private const val MODEL_REBUILD_DEBOUNCE_MS = 96L
     }
 }
