@@ -4,6 +4,8 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.View
@@ -12,16 +14,22 @@ import cc.axymorrsen.amtoolnext.config.HookConfigRuntime
 import cc.axymorrsen.amtoolnext.hook.AppleMusic653
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 /**
- * Floating bottom chrome for Apple Music 6.5.3.
+ * Low-overhead floating bottom chrome for Apple Music 6.5.3.
  *
- * Geometry ownership stays with Apple Music: the stacked navigation root and mini-player root keep
- * their original size/constraints/peek semantics. We only turn the inner tabs frame and
- * mini_player_content into inset rounded surfaces, so player gestures and content insets continue
- * to use Apple's native layout.
+ * alpha2 styled the mini player and tab bar as two independent capsules. On the stacked phone
+ * host those two views share one fixed-height native holder, so margins/elevation made them collide
+ * and exposed the artwork-tinted holder behind them. It also re-scanned/restyled on every window
+ * focus change, causing layout churn.
+ *
+ * alpha3 treats bottom_navigation_root_stacked as the only geometry owner: one floating card,
+ * native mini-player + navigation remain vertically stacked inside it, and all inner native
+ * backgrounds/seams are made transparent. Styling is identity/revision gated and installed from a
+ * bounded resume retry only; no focus/pre-draw/global-layout hot loop exists.
  */
 internal class FloatingBottomBarRuntime(
     private val module: XposedModule,
@@ -32,14 +40,24 @@ internal class FloatingBottomBarRuntime(
         val elevation: Float,
         val translationZ: Float,
         val clipToOutline: Boolean,
-        val alpha: Float,
+        val visibility: Int,
         val leftMargin: Int?,
         val topMargin: Int?,
         val rightMargin: Int?,
         val bottomMargin: Int?,
     )
 
+    private data class ActivitySession(
+        val root: WeakReference<View>,
+        val revision: Long,
+        val enabled: Boolean,
+    )
+
+    private val main = Handler(Looper.getMainLooper())
     private val states = WeakHashMap<View, ViewState>()
+    private val sessions = WeakHashMap<Activity, ActivitySession>()
+    private val retryGeneration = WeakHashMap<Activity, Long>()
+    private var generation = 0L
 
     fun install() {
         runCatching {
@@ -50,150 +68,166 @@ internal class FloatingBottomBarRuntime(
                 .intercept { chain ->
                     val result = chain.proceed()
                     val activity = chain.thisObject as? Activity
-                    activity?.window?.decorView?.post {
-                        apply(activity)
-                        // Some artist/album fragments mount bottom chrome after onPostResume.
-                        activity.window.decorView.postDelayed({ apply(activity) }, 320L)
+                    if (activity != null && activity.packageName == AppleMusic653.PACKAGE) {
+                        scheduleBoundedAttach(activity)
                     }
                     result
                 }
-
-            val focus = Activity::class.java.getDeclaredMethod(
-                "onWindowFocusChanged",
-                Boolean::class.javaPrimitiveType,
-            ).apply { isAccessible = true }
-            module.hook(focus)
-                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                .intercept { chain ->
-                    val result = chain.proceed()
-                    val activity = chain.thisObject as? Activity
-                    if (activity != null && chain.args.firstOrNull() == true) {
-                        activity.window.decorView.post { apply(activity) }
-                    }
-                    result
-                }
-
-            logger(Log.INFO, "floating bottom chrome hooks installed", null)
+            logger(Log.INFO, "floating bottom chrome alpha3 hook installed", null)
         }.onFailure { error ->
-            logger(Log.ERROR, "floating bottom chrome installation failed", error)
+            logger(Log.ERROR, "floating bottom chrome alpha3 installation failed", error)
         }
     }
 
-    private fun apply(activity: Activity) {
-        if (activity.packageName != AppleMusic653.PACKAGE) return
-
-        val enabled = HookConfigRuntime.current().let {
-            it.enabled && it.floatingBottomBar
+    private fun scheduleBoundedAttach(activity: Activity) {
+        val token = synchronized(retryGeneration) {
+            generation += 1L
+            generation.also { retryGeneration[activity] = it }
         }
+        val delays = longArrayOf(0L, 48L, 144L, 320L)
+        delays.forEach { delay ->
+            main.postDelayed({
+                if (activity.isFinishing || activity.isDestroyed) return@postDelayed
+                val current = synchronized(retryGeneration) { retryGeneration[activity] }
+                if (current != token) return@postDelayed
+                if (applyIfReady(activity)) {
+                    synchronized(retryGeneration) {
+                        if (retryGeneration[activity] == token) retryGeneration.remove(activity)
+                    }
+                }
+            }, delay)
+        }
+    }
+
+    private fun applyIfReady(activity: Activity): Boolean {
+        val root = find(activity, "bottom_navigation_root_stacked")
+            ?: find(activity, "bottom_navigation_root_flat")
+            ?: return false
+
+        val config = HookConfigRuntime.current()
+        val enabled = config.enabled && config.floatingBottomBar
+        val previous = synchronized(sessions) { sessions[activity] }
+        if (
+            previous?.root?.get() === root &&
+            previous.revision == config.revision &&
+            previous.enabled == enabled
+        ) {
+            return true
+        }
+
         if (!enabled) {
-            restoreAll()
-            return
+            restoreOwnedViews()
+            synchronized(sessions) {
+                sessions[activity] = ActivitySession(WeakReference(root), config.revision, false)
+            }
+            return true
         }
 
-        val root = find(
-            activity,
-            "bottom_navigation_root_stacked",
-        ) ?: find(activity, "bottom_navigation_root_flat")
+        styleRoot(activity, root)
+        synchronized(sessions) {
+            sessions[activity] = ActivitySession(WeakReference(root), config.revision, true)
+        }
 
-        val navFrame = find(activity, "bottom_navigation_tabs_frame")
-            ?: find(activity, "bottom_navigation")
-        val nav = find(activity, "bottom_navigation")
-        val miniRoot = find(activity, "mini_player")
-            ?: find(activity, "mini_player_touch_panel")
-        val miniContent = find(activity, "mini_player_content")
-        val divider = find(activity, "navigation_tabs_divider")
-        val topShadow = find(activity, "nav_tabs_top_shadow")
-
-        if (navFrame == null && miniContent == null) return
-
-        root?.let { view ->
-            save(view)
-            view.background = null
-            if (view is ViewGroup) {
-                view.clipChildren = false
-                view.clipToPadding = false
+        // Width/height and short holder ancestors are reliable only after layout. This is a
+        // one-shot post, not a permanent layout observer.
+        root.post {
+            if (root.isAttachedToWindow) {
+                clearShortChromeBackdrops(activity, root)
             }
         }
-        miniRoot?.let { view ->
-            save(view)
-            view.background = null
-            if (view is ViewGroup) {
-                view.clipChildren = false
-                view.clipToPadding = false
+        return true
+    }
+
+    private fun styleRoot(activity: Activity, root: View) {
+        val density = root.resources.displayMetrics.density
+        val surface = resolveSurfaceColor(activity)
+
+        save(root)
+        (root.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+            val side = dp(density, 12f)
+            val bottom = dp(density, 8f)
+            if (
+                params.leftMargin != side ||
+                params.rightMargin != side ||
+                params.bottomMargin != bottom
+            ) {
+                params.leftMargin = side
+                params.rightMargin = side
+                params.bottomMargin = bottom
+                root.layoutParams = params
             }
         }
-
-        val surfaceColor = resolveSurfaceColor(activity)
-        navFrame?.let { view ->
-            styleCapsule(
-                view = view,
-                color = surfaceColor,
-                horizontalMarginDp = 12f,
-                topMarginDp = null,
-                bottomMarginDp = 8f,
-                radiusDp = 28f,
-                elevationDp = 8f,
-            )
+        root.background = capsule(surface, density, 28f)
+        root.elevation = 8f * density
+        root.translationZ = 0f
+        root.clipToOutline = true
+        if (root is ViewGroup) {
+            root.clipChildren = true
+            root.clipToPadding = false
         }
 
-        // Keep BottomNavigationView's native selection/tint/ripple logic. The parent frame clips
-        // its stock background to the rounded outline.
-        nav?.let { view ->
-            save(view)
-            view.clipToOutline = true
-        }
+        // One capsule owns the material. Native children keep sizing, click handling, menu state
+        // and player gestures, but stop painting rectangular layers behind the capsule.
+        listOf(
+            "mini_player",
+            "mini_player_touch_panel",
+            "mini_player_content",
+            "bottom_navigation_tabs_frame",
+            "bottom_navigation",
+        ).mapNotNull { find(activity, it) }.distinct().forEach(::clearBackground)
 
-        miniContent?.let { view ->
-            styleCapsule(
-                view = view,
-                color = surfaceColor,
-                horizontalMarginDp = 12f,
-                topMarginDp = 4f,
-                bottomMarginDp = 4f,
-                radiusDp = 20f,
-                elevationDp = 7f,
-            )
-        }
+        listOf(
+            "navigation_tabs_divider",
+            "nav_tabs_top_shadow",
+        ).mapNotNull { find(activity, it) }.forEach(::hideSeam)
 
-        listOfNotNull(divider, topShadow).forEach { seam ->
-            save(seam)
-            seam.alpha = 0f
+        logger(
+            Log.INFO,
+            "floating bottom chrome applied root=${root.javaClass.name}, revision=" +
+                HookConfigRuntime.revision(),
+            null,
+        )
+    }
+
+    /**
+     * Apple can paint the artwork tint on a short holder above the stacked root. Clear only
+     * ancestors whose measured height is close to the bottom chrome itself. This avoids touching
+     * the full player sheet/page background while removing the blue rectangular backdrop visible
+     * around the floating card.
+     */
+    private fun clearShortChromeBackdrops(activity: Activity, root: View) {
+        if (root.height <= 0) return
+        val decor = activity.window.decorView
+        val slack = dp(root.resources.displayMetrics.density, 72f)
+        val maxHeight = root.height + slack
+        var parent = root.parent as? View
+        var depth = 0
+        while (parent != null && parent !== decor && depth < 4) {
+            if (
+                parent.height in 1..maxHeight &&
+                parent.width >= (root.width - dp(root.resources.displayMetrics.density, 24f))
+            ) {
+                clearBackground(parent)
+                if (parent is ViewGroup) {
+                    parent.clipChildren = false
+                    parent.clipToPadding = false
+                }
+            }
+            parent = parent.parent as? View
+            depth += 1
         }
     }
 
-    private fun styleCapsule(
-        view: View,
-        color: Int,
-        horizontalMarginDp: Float,
-        topMarginDp: Float?,
-        bottomMarginDp: Float?,
-        radiusDp: Float,
-        elevationDp: Float,
-    ) {
+    private fun clearBackground(view: View) {
         save(view)
-        val density = view.resources.displayMetrics.density
-        val horizontal = (horizontalMarginDp * density).roundToInt()
-
-        (view.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-            params.leftMargin = horizontal
-            params.rightMargin = horizontal
-            topMarginDp?.let { params.topMargin = (it * density).roundToInt() }
-            bottomMarginDp?.let { params.bottomMargin = (it * density).roundToInt() }
-            view.layoutParams = params
-        }
-
-        view.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusDp * density
-            setColor(color)
-            setStroke(
-                (0.5f * density).roundToInt().coerceAtLeast(1),
-                if (isLight(color)) 0x18000000 else 0x24FFFFFF,
-            )
-        }
-        view.elevation = elevationDp * density
+        if (view.background != null) view.background = null
+        view.elevation = 0f
         view.translationZ = 0f
-        view.clipToOutline = true
+    }
+
+    private fun hideSeam(view: View) {
+        save(view)
+        if (view.visibility != View.GONE) view.visibility = View.GONE
     }
 
     private fun save(view: View) {
@@ -205,7 +239,7 @@ internal class FloatingBottomBarRuntime(
                 elevation = view.elevation,
                 translationZ = view.translationZ,
                 clipToOutline = view.clipToOutline,
-                alpha = view.alpha,
+                visibility = view.visibility,
                 leftMargin = margins?.leftMargin,
                 topMargin = margins?.topMargin,
                 rightMargin = margins?.rightMargin,
@@ -214,7 +248,7 @@ internal class FloatingBottomBarRuntime(
         }
     }
 
-    private fun restoreAll() {
+    private fun restoreOwnedViews() {
         synchronized(states) {
             states.entries.toList().forEach { (view, state) ->
                 runCatching {
@@ -222,7 +256,7 @@ internal class FloatingBottomBarRuntime(
                     view.elevation = state.elevation
                     view.translationZ = state.translationZ
                     view.clipToOutline = state.clipToOutline
-                    view.alpha = state.alpha
+                    view.visibility = state.visibility
                     val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
                     if (
                         margins != null &&
@@ -231,13 +265,20 @@ internal class FloatingBottomBarRuntime(
                         state.rightMargin != null &&
                         state.bottomMargin != null
                     ) {
-                        margins.setMargins(
-                            state.leftMargin,
-                            state.topMargin,
-                            state.rightMargin,
-                            state.bottomMargin,
-                        )
-                        view.layoutParams = margins
+                        if (
+                            margins.leftMargin != state.leftMargin ||
+                            margins.topMargin != state.topMargin ||
+                            margins.rightMargin != state.rightMargin ||
+                            margins.bottomMargin != state.bottomMargin
+                        ) {
+                            margins.setMargins(
+                                state.leftMargin,
+                                state.topMargin,
+                                state.rightMargin,
+                                state.bottomMargin,
+                            )
+                            view.layoutParams = margins
+                        }
                     }
                 }
             }
@@ -246,14 +287,21 @@ internal class FloatingBottomBarRuntime(
     }
 
     private fun find(activity: Activity, name: String): View? {
-        val id = activity.resources.getIdentifier(
-            name,
-            "id",
-            AppleMusic653.PACKAGE,
-        )
+        val id = activity.resources.getIdentifier(name, "id", AppleMusic653.PACKAGE)
         if (id == 0) return null
         return activity.findViewById(id)
     }
+
+    private fun capsule(color: Int, density: Float, radiusDp: Float): Drawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radiusDp * density
+            setColor(color)
+            setStroke(
+                (0.5f * density).roundToInt().coerceAtLeast(1),
+                if (isLight(color)) 0x14000000 else 0x20FFFFFF,
+            )
+        }
 
     private fun resolveSurfaceColor(activity: Activity): Int {
         val value = TypedValue()
@@ -270,12 +318,14 @@ internal class FloatingBottomBarRuntime(
             value.data
         }
         return Color.argb(
-            248,
+            252,
             Color.red(base),
             Color.green(base),
             Color.blue(base),
         )
     }
+
+    private fun dp(density: Float, value: Float): Int = (value * density).roundToInt()
 
     private fun isLight(color: Int): Boolean {
         val luminance =
