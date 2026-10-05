@@ -10,8 +10,8 @@ android {
         applicationId = "cc.axymorrsen.appleprovidercompat"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2000002
-        versionName = "2.0.0-alpha2"
+        versionCode = 2000003
+        versionName = "2.0.0-alpha3"
     }
 
     buildTypes {
