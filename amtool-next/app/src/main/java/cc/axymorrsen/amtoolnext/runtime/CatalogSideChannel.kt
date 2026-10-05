@@ -83,16 +83,12 @@ internal class CatalogSideChannel(
         }
     }
 
-    private fun installExecutor(method: Method) {
-        module.hook(method)
+    private fun installExecutor(target: AppleMusic653.CatalogExecutor) {
+        module.hook(target.method)
             .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
             .intercept { chain ->
-                val queryIndex = method.parameterTypes.indices.firstOrNull { index ->
-                    index > 3 && Map::class.java.isAssignableFrom(method.parameterTypes[index])
-                } ?: return@intercept chain.proceed()
-
                 @Suppress("UNCHECKED_CAST")
-                val original = chain.args.getOrNull(queryIndex) as? Map<Any?, Any?>
+                val original = chain.args.getOrNull(target.queryIndex) as? Map<Any?, Any?>
                     ?: return@intercept chain.proceed()
                 if (!original.containsKey(TOKEN)) return@intercept chain.proceed()
 
@@ -101,7 +97,7 @@ internal class CatalogSideChannel(
                 query.putAll(original)
                 query.remove(TOKEN)
                 query["l"] = LANGUAGE
-                args[queryIndex] = query
+                args[target.queryIndex] = query
                 args[3] = STOREFRONT
                 chain.proceed(args)
             }
