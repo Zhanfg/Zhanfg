@@ -128,11 +128,66 @@ internal class CatalogSideChannel(
     }
 
     private fun resolveBatch(batch: Map<String, Pending>) {
-        val requestedIds = batch.keys.toList()
-        val hintedIds = batch.filterValues { it.isrcHint != null }.keys
-        val accountLookupIds = requestedIds.filterNot(hintedIds::contains)
+        val hinted = batch.filterValues { !it.isrcHint.isNullOrBlank() }
+        if (hinted.isEmpty()) {
+            resolveBatchByAccount(batch)
+            return
+        }
 
-        fun continueWithIdentity(accountEntities: List<EntitySnapshot>) {
+        val fallback = LinkedHashMap<String, Pending>()
+        batch.forEach { (id, request) ->
+            if (request.isrcHint.isNullOrBlank()) fallback[id] = request
+        }
+
+        val remaining = AtomicInteger(hinted.size)
+        hinted.forEach { (requestedId, request) ->
+            val isrc = request.isrcHint!!
+            query(
+                path = "songs",
+                query = linkedMapOf(
+                    "filter[isrc]" to isrc,
+                    "l" to LANGUAGE,
+                    "platform" to "android",
+                    "include[songs]" to "artists",
+                    "limit" to "1",
+                ),
+                localized = true,
+            ) { response ->
+                val alias = parseEntities(response)
+                    .firstOrNull { it.alias?.hasValue() == true }
+                    ?.alias
+
+                if (alias != null) {
+                    finishBatch(mapOf(requestedId to request), mapOf(requestedId to alias))
+                } else {
+                    synchronized(fallback) {
+                        fallback[requestedId] = request
+                    }
+                }
+
+                if (remaining.decrementAndGet() == 0) {
+                    val pendingFallback = synchronized(fallback) { LinkedHashMap(fallback) }
+                    if (pendingFallback.isNotEmpty()) {
+                        resolveBatchByAccount(pendingFallback)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveBatchByAccount(batch: Map<String, Pending>) {
+        val requestedIds = batch.keys.toList()
+
+        query(
+            path = "songs",
+            query = linkedMapOf(
+                "ids" to requestedIds.joinToString(","),
+                "platform" to "android",
+                "include[songs]" to "artists",
+            ),
+            localized = false,
+        ) { accountResponse ->
+            val accountEntities = parseEntities(accountResponse)
             val identityByRequested = requestedIds.associateWith { requestedId ->
                 accountEntities.firstOrNull { requestedId in it.ids }
             }
@@ -150,7 +205,7 @@ internal class CatalogSideChannel(
 
             if (allLookupIds.isEmpty()) {
                 finishBatch(batch, emptyMap())
-                return
+                return@query
             }
 
             query(
@@ -187,33 +242,12 @@ internal class CatalogSideChannel(
 
                 resolveByIsrcFallback(
                     unresolved = unresolved,
-                    batch = batch,
                     identityByRequested = identityByRequested,
                     resolved = resolved,
                 ) { completed ->
                     finishBatch(batch, completed)
                 }
             }
-        }
-
-        // Artist Top Songs already exposes ISRC in its MediaEntity. Avoid an extra account
-        // catalog round-trip for those visible rows; ordinary model/getter requests still use
-        // one coalesced account batch to recover alternate Apple IDs and ISRC.
-        if (accountLookupIds.isEmpty()) {
-            continueWithIdentity(emptyList())
-            return
-        }
-
-        query(
-            path = "songs",
-            query = linkedMapOf(
-                "ids" to accountLookupIds.joinToString(","),
-                "platform" to "android",
-                "include[songs]" to "artists",
-            ),
-            localized = false,
-        ) { accountResponse ->
-            continueWithIdentity(parseEntities(accountResponse))
         }
     }
 
