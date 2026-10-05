@@ -52,6 +52,18 @@ final class AppleLyricGenerationGate {
         return new Ticket(generation, epoch);
     }
 
+    /**
+     * Invalidates every delayed request/callback without changing the canonical track generation.
+     * Used when the Apple Music task is explicitly removed from Recents while the playback service
+     * and MediaSession may still stay alive.
+     */
+    synchronized void invalidateCurrent() {
+        epoch++;
+        requestAttempts = 0;
+        playbackPolls = 0;
+        phase = Phase.EMPTY;
+    }
+
     synchronized boolean accepts(Ticket ticket) {
         return ticket != null &&
                 ticket.generation == generation &&
