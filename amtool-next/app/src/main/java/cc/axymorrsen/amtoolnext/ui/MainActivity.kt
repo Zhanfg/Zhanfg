@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix5", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix6", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Türkiye 账号、订阅、播放对象和原生请求保持不变；中文标题改用独立 CN catalog 查询后，仅覆盖界面 getter 返回值。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -84,7 +84,7 @@ private fun SettingsScreen() {
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "hotfix5 先用土区歌曲 ID 取 ISRC，再按 ISRC 查询中国大陆对应录音版本；解决跨 storefront Adam ID 不一致导致中文标题查不到的问题。",
+                "hotfix6 保留 ISRC 跨区中文标题映射，并配套修复歌词路由：切到无歌词歌曲时立即清掉上一首模块歌词，迟到的旧歌词结果也不会重新覆盖当前歌曲。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
