@@ -34,9 +34,9 @@ final class AppleProviderRuntimeV3 {
     private static final String MEDIA_ID =
             "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String LYRIC_INFO = "lyricInfo";
-    private static final long LEASE_HEARTBEAT_MS = 800L;
-    private static final long LEASE_PAST_MS = 1_000L;
-    private static final long LEASE_FUTURE_MS = 4_500L;
+    private static final long LEASE_HEARTBEAT_MS = 500L;
+    private static final long LEASE_PAST_MS = 750L;
+    private static final long LEASE_FUTURE_MS = 2_500L;
 
     private static final class CanonicalTrack {
         final String id;
@@ -692,7 +692,15 @@ final class AppleProviderRuntimeV3 {
             fullLines = (List<?>) readyLines;
             long positionMs = estimatedPositionMs(info.playback);
             leaseLines = leaseWindow(fullLines, positionMs);
-            if (leaseLines.isEmpty()) return;
+            if (leaseLines.isEmpty()) {
+                // Instrumental gap / no current lease: remove the previous module-owned payload.
+                // This is essential because ColorOS caches lyricInfo independently from the host.
+                if (clearOwnedLyricInfo(info.metadata)) {
+                    lastLeaseWindowKey = null;
+                    main.post(() -> writeSessionMetadata(session, info.metadata));
+                }
+                return;
+            }
 
             int first = fullLines.indexOf(leaseLines.get(0));
             int last = fullLines.indexOf(leaseLines.get(leaseLines.size() - 1));
