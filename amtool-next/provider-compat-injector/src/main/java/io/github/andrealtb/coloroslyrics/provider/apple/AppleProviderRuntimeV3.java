@@ -1,6 +1,12 @@
 package io.github.andrealtb.coloroslyrics.provider.apple;
 
+import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.Application;
+import android.app.Service;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -37,6 +43,7 @@ final class AppleProviderRuntimeV3 {
     private static final long LEASE_HEARTBEAT_MS = 500L;
     private static final long LEASE_PAST_MS = 750L;
     private static final long LEASE_FUTURE_MS = 2_500L;
+    private static final long TASK_PROBE_DELAY_MS = 1_200L;
 
     private static final class CanonicalTrack {
         final String id;
@@ -96,6 +103,10 @@ final class AppleProviderRuntimeV3 {
     private final ThreadLocal<Boolean> moduleWrite = new ThreadLocal<>();
     private final ThreadLocal<Boolean> ownLyricRequest = new ThreadLocal<>();
     private final AppleLyricGenerationGate lyricGate = new AppleLyricGenerationGate();
+    private final WeakHashMap<Activity, Boolean> startedActivities = new WeakHashMap<>();
+
+    private boolean hostTaskPresent = true;
+    private boolean taskProbeScheduled;
 
     private final WeakHashMap<MediaSession, SessionState> sessions = new WeakHashMap<>();
     private final LinkedHashMap<String, Object> playbackItems =
@@ -144,6 +155,7 @@ final class AppleProviderRuntimeV3 {
     void install() throws Exception {
         resolveProviderPrimitives();
         installSessionHooks();
+        installHostTaskLifecycleHooks();
         installPlaybackDiscoveryHooks();
         installLyricsHooks();
         module.log(Log.INFO, TAG, "provider runtime v3 installed");
@@ -298,6 +310,171 @@ final class AppleProviderRuntimeV3 {
                     }
                     return chain.proceed();
                 });
+    }
+
+    /**
+     * Recents removal is not equivalent to MediaSession.release().
+     *
+     * Apple Music may keep its playback service and MediaSession alive after the task card is
+     * swiped away. ColorOS then keeps rendering the last lyricInfo indefinitely unless the provider
+     * explicitly retracts it. We therefore model task presence as a separate lease:
+     *
+     * - Activity start => task present
+     * - all activities stopped => poll ActivityManager#getAppTasks while backgrounded
+     * - task disappears => invalidate every lyric ticket + lease and synchronously retract lyricInfo
+     * - Service#onTaskRemoved => immediate fast path when the host service receives it
+     */
+    private void installHostTaskLifecycleHooks() throws Exception {
+        Method onStart = Activity.class.getDeclaredMethod("onStart");
+        onStart.setAccessible(true);
+        module.hook(onStart)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept(chain -> {
+                    Object result = chain.proceed();
+                    Activity activity = (Activity) chain.getThisObject();
+                    if (activity != null && HOST.equals(activity.getPackageName())) {
+                        synchronized (lock) {
+                            startedActivities.put(activity, Boolean.TRUE);
+                        }
+                        onHostTaskPresent("activity-start");
+                    }
+                    return result;
+                });
+
+        Method onStop = Activity.class.getDeclaredMethod("onStop");
+        onStop.setAccessible(true);
+        module.hook(onStop)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept(chain -> {
+                    Object result = chain.proceed();
+                    Activity activity = (Activity) chain.getThisObject();
+                    if (activity != null && HOST.equals(activity.getPackageName())) {
+                        boolean background;
+                        synchronized (lock) {
+                            startedActivities.remove(activity);
+                            background = startedActivities.isEmpty();
+                        }
+                        if (background) scheduleTaskPresenceProbe();
+                    }
+                    return result;
+                });
+
+        Method onTaskRemoved = Service.class.getDeclaredMethod(
+                "onTaskRemoved", Intent.class);
+        onTaskRemoved.setAccessible(true);
+        module.hook(onTaskRemoved)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept(chain -> {
+                    onHostTaskRemoved("service-onTaskRemoved");
+                    return chain.proceed();
+                });
+
+        module.log(Log.INFO, TAG, "host task lifecycle hooks installed");
+    }
+
+    private void scheduleTaskPresenceProbe() {
+        synchronized (lock) {
+            if (taskProbeScheduled) return;
+            taskProbeScheduled = true;
+        }
+        main.postDelayed(this::runTaskPresenceProbe, TASK_PROBE_DELAY_MS);
+    }
+
+    private void runTaskPresenceProbe() {
+        boolean shouldContinue;
+        synchronized (lock) {
+            taskProbeScheduled = false;
+            if (!startedActivities.isEmpty()) return;
+        }
+
+        if (!hasHostTask()) {
+            onHostTaskRemoved("appTasks-empty");
+            return;
+        }
+
+        synchronized (lock) {
+            shouldContinue = startedActivities.isEmpty() && hostTaskPresent;
+        }
+        if (shouldContinue) {
+            scheduleTaskPresenceProbe();
+        }
+    }
+
+    private boolean hasHostTask() {
+        try {
+            ActivityManager manager =
+                    (ActivityManager) application.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) return true;
+
+            for (ActivityManager.AppTask task : manager.getAppTasks()) {
+                if (task == null) continue;
+                ActivityManager.RecentTaskInfo info = task.getTaskInfo();
+                if (info == null) continue;
+
+                ComponentName base = info.baseActivity;
+                ComponentName top = info.topActivity;
+                ComponentName component =
+                        info.baseIntent == null ? null : info.baseIntent.getComponent();
+
+                if ((base != null && HOST.equals(base.getPackageName())) ||
+                        (top != null && HOST.equals(top.getPackageName())) ||
+                        (component != null && HOST.equals(component.getPackageName()))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Throwable error) {
+            module.log(Log.ERROR, TAG, "host task presence probe failed", error);
+            // Fail open: never retract lyrics merely because ActivityManager querying failed.
+            return true;
+        }
+    }
+
+    private void onHostTaskPresent(String source) {
+        boolean resumed;
+        synchronized (lock) {
+            resumed = !hostTaskPresent;
+            hostTaskPresent = true;
+            taskProbeScheduled = false;
+            if (resumed) {
+                lyricGate.invalidateCurrent();
+                leaseEpoch++;
+                heartbeatEpoch = -1L;
+                lastLeaseWindowKey = null;
+            }
+        }
+
+        if (resumed) {
+            module.log(Log.INFO, TAG, "host task lease restored source=" + source);
+            maybeRequestLyrics();
+        }
+    }
+
+    private void onHostTaskRemoved(String source) {
+        boolean changed;
+        synchronized (lock) {
+            changed = hostTaskPresent;
+            hostTaskPresent = false;
+            taskProbeScheduled = false;
+
+            lyricGate.invalidateCurrent();
+            readyLines = null;
+            readyBegins = null;
+            readyEnds = null;
+            readyGeneration = 0L;
+
+            leaseEpoch++;
+            heartbeatEpoch = -1L;
+            lastLeaseWindowKey = null;
+        }
+
+        // Do this synchronously while the Apple Music process/service is still alive so ColorOS
+        // receives a final MediaSession metadata update with our lyricInfo removed.
+        clearOwnedLyricsFromSessions();
+
+        if (changed) {
+            module.log(Log.INFO, TAG, "host task lease revoked source=" + source);
+        }
     }
 
     private void installPlaybackDiscoveryHooks() {
@@ -462,7 +639,7 @@ final class AppleProviderRuntimeV3 {
     private void markHostLyricRequestInFlight() {
         final AppleLyricGenerationGate.Ticket ticket;
         synchronized (lock) {
-            if (current == null) return;
+            if (!hostTaskPresent || current == null) return;
             lyricGate.markHostRequestInFlight();
             ticket = lyricGate.ticket();
         }
@@ -492,6 +669,7 @@ final class AppleProviderRuntimeV3 {
         final int attempt;
 
         synchronized (lock) {
+            if (!hostTaskPresent) return;
             track = current;
             if (track == null || empty(track.id)) return;
 
@@ -596,6 +774,7 @@ final class AppleProviderRuntimeV3 {
         final AppleLyricGenerationGate.Ticket ticket;
         final CanonicalTrack track;
         synchronized (lock) {
+            if (!hostTaskPresent) return;
             ticket = lyricGate.ticket();
             track = current;
         }
@@ -678,7 +857,8 @@ final class AppleProviderRuntimeV3 {
         final String windowKey;
 
         synchronized (lock) {
-            if (!(readyLines instanceof List) ||
+            if (!hostTaskPresent ||
+                    !(readyLines instanceof List) ||
                     readyGeneration != generation ||
                     currentTrackIdentity == null) {
                 return;
@@ -755,7 +935,8 @@ final class AppleProviderRuntimeV3 {
         final long gen;
 
         synchronized (lock) {
-            if (!(readyLines instanceof List) ||
+            if (!hostTaskPresent ||
+                    !(readyLines instanceof List) ||
                     readyGeneration != generation ||
                     lyricGate.phase() != AppleLyricGenerationGate.Phase.READY) {
                 return;
