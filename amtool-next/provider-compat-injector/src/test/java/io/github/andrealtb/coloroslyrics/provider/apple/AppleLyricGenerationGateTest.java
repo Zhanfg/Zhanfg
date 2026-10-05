@@ -84,4 +84,23 @@ public class AppleLyricGenerationGateTest {
         assertEquals(1, gate.nextPlaybackPoll(second, 2));
         assertEquals(-1, gate.nextPlaybackPoll(first, 2));
     }
+    @Test
+    public void explicitTaskRemovalInvalidatesSameGenerationCallbacks() {
+        AppleLyricGenerationGate gate = new AppleLyricGenerationGate();
+        gate.bindGeneration(42L);
+        AppleLyricGenerationGate.Ticket beforeRemoval = gate.ticket();
+        assertTrue(gate.beginProviderRequest());
+
+        gate.invalidateCurrent();
+
+        assertFalse(gate.accepts(beforeRemoval));
+        assertEquals(42L, gate.generation());
+        assertEquals(AppleLyricGenerationGate.Phase.EMPTY, gate.phase());
+        assertEquals(0, gate.attempts());
+
+        AppleLyricGenerationGate.Ticket afterReopen = gate.ticket();
+        assertTrue(gate.accepts(afterReopen));
+        assertTrue(gate.beginProviderRequest());
+    }
+
 }
