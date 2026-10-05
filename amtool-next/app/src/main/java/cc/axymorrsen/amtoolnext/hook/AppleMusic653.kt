@@ -152,12 +152,12 @@ internal object AppleMusic653 {
         val getMediaApi = findMethod(companion.javaClass, "getMediaApi", 0)
             ?: error("MediaApiRepositoryHolder#getMediaApi unavailable")
         val mediaApi = requireNotNull(getMediaApi.invoke(companion))
-        val direct = findMethod(mediaApi.javaClass, "B", 3) { method ->
+        val direct = findMethod(mediaApi.javaClass, "v", 3) { method ->
             val p = method.parameterTypes
             p[0] == String::class.java &&
                 Map::class.java.isAssignableFrom(p[1]) &&
                 p[2].name == "kotlin.coroutines.Continuation"
-        } ?: error("MediaApi#B(String,Map,Continuation) unavailable")
+        } ?: error("MediaApi#v(String,Map,Continuation) unavailable")
         return MediaApiAccess(mediaApi, direct)
     }
 
