@@ -75,11 +75,26 @@ final class AppleProviderRuntimeV3 {
 
         boolean same(CanonicalTrack other) {
             if (other == null || isBlank() || other.isBlank()) return false;
-            if (!empty(id) && !empty(other.id)) return id.equals(other.id);
+
+            if (!empty(id) && !empty(other.id) && id.equals(other.id)) {
+                return true;
+            }
+
+            // Apple can expose a different MediaSession/PlaybackItem ID while keeping the same
+            // recording alive (route/decoder/library-vs-catalog hand-off). Do not create a new
+            // lyric generation solely because that representation changed.
             if (!norm(title).equals(norm(other.title))) return false;
             if (!norm(artist).equals(norm(other.artist))) return false;
-            if (durationMs > 0L && other.durationMs > 0L) {
-                return Math.abs(durationMs - other.durationMs) <= 3000L;
+
+            if (durationMs > 0L && other.durationMs > 0L &&
+                    Math.abs(durationMs - other.durationMs) > 3000L) {
+                return false;
+            }
+
+            String leftAlbum = norm(album);
+            String rightAlbum = norm(other.album);
+            if (!leftAlbum.isEmpty() && !rightAlbum.isEmpty() && !leftAlbum.equals(rightAlbum)) {
+                return false;
             }
             return true;
         }
@@ -255,10 +270,22 @@ final class AppleProviderRuntimeV3 {
                     int value = state == null
                             ? PlaybackState.STATE_NONE
                             : state.getState();
+                    int previous;
                     synchronized (lock) {
                         SessionState info = sessionState(session);
+                        previous = info.playbackState;
                         info.playback = state;
                         info.playbackState = value;
+                    }
+
+                    if (previous == PlaybackState.STATE_PLAYING &&
+                            value == PlaybackState.STATE_PAUSED) {
+                        module.log(
+                                Log.INFO,
+                                TAG,
+                                "host playback transitioned PLAYING->PAUSED position=" +
+                                        (state == null ? -1L : state.getPosition())
+                        );
                     }
 
                     if (isTerminalPlaybackState(value)) {
@@ -1040,7 +1067,10 @@ final class AppleProviderRuntimeV3 {
 
     private CanonicalTrack trackFromPlaybackItem(Object item) {
         if (item == null) return null;
-        String id = string(call(item, "getId"));
+        String id = first(
+                string(call(item, "getSubscriptionStoreId")),
+                string(call(item, "getId"))
+        );
         String title = first(
                 readStringField(item, "name"),
                 string(call(item, "getNowPlayingTitle")),
