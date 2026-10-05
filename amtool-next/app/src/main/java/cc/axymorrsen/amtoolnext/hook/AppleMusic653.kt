@@ -182,7 +182,10 @@ internal object AppleMusic653 {
         } ?: error("Artist Top Songs model binder e1#a unavailable")
 
         val title = findField(model, "L")
-            ?.takeIf { it.type == String::class.java }
+            ?.takeIf { field ->
+                field.type.isAssignableFrom(String::class.java) ||
+                    CharSequence::class.java.isAssignableFrom(field.type)
+            }
             ?: error("Artist Top Songs title field e1#L unavailable")
         title.isAccessible = true
 
