@@ -841,6 +841,18 @@ final class AppleProviderRuntimeV3 {
         return fallback;
     }
 
+    private void clearOwnedLyricsFromSession(MediaSession session) {
+        if (session == null) return;
+        MediaMetadata metadata;
+        synchronized (lock) {
+            SessionState state = sessions.get(session);
+            metadata = state == null ? null : state.metadata;
+        }
+        if (metadata != null && clearOwnedLyricInfo(metadata)) {
+            writeSessionMetadata(session, metadata);
+        }
+    }
+
     private void clearOwnedLyricsFromSessions() {
         List<Map.Entry<MediaSession, MediaMetadata>> updates = new ArrayList<>();
         synchronized (lock) {
