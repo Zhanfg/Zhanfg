@@ -102,9 +102,6 @@ final class AppleProviderRuntimeV3 {
     private static final class SessionState {
         MediaMetadata metadata;
         CanonicalTrack track;
-        PlaybackState playback;
-        int playbackState = PlaybackState.STATE_NONE;
-        boolean active;
     }
 
     private final XposedModule module;
@@ -226,62 +223,6 @@ final class AppleProviderRuntimeV3 {
 
                     onHostMetadata(session, metadata);
                     return chain.proceed();
-                });
-
-        Method setPlaybackState = MediaSession.class.getDeclaredMethod(
-                "setPlaybackState", PlaybackState.class);
-        setPlaybackState.setAccessible(true);
-        module.hook(setPlaybackState)
-                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                .intercept(chain -> {
-                    Object result = chain.proceed();
-                    MediaSession session = (MediaSession) chain.getThisObject();
-                    PlaybackState state = (PlaybackState) chain.getArg(0);
-                    int value = state == null
-                            ? PlaybackState.STATE_NONE
-                            : state.getState();
-                    int previous;
-                    synchronized (lock) {
-                        SessionState info = sessionState(session);
-                        previous = info.playbackState;
-                        info.playback = state;
-                        info.playbackState = value;
-                    }
-
-                    if (previous == PlaybackState.STATE_PLAYING &&
-                            value == PlaybackState.STATE_PAUSED) {
-                        module.log(
-                                Log.INFO,
-                                TAG,
-                                "host playback transitioned PLAYING->PAUSED position=" +
-                                        (state == null ? -1L : state.getPosition())
-                        );
-                    }
-
-                    // PlaybackState is observation-only. Apple may transiently report
-                    // STOPPED/NONE during route, decoder or audio-variant hand-off; writing
-                    // MediaSession metadata from that edge can freeze the active pipeline.
-                    // Definitive cleanup belongs to release/task-removal, while a real track
-                    // change is cleaned in the next Apple-owned setMetadata carrier.
-                    return result;
-                });
-
-        Method setActive = MediaSession.class.getDeclaredMethod(
-                "setActive", boolean.class);
-        setActive.setAccessible(true);
-        module.hook(setActive)
-                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                .intercept(chain -> {
-                    Object result = chain.proceed();
-                    MediaSession session = (MediaSession) chain.getThisObject();
-                    boolean active = (Boolean) chain.getArg(0);
-                    synchronized (lock) {
-                        sessionState(session).active = active;
-                    }
-                    // Session activity is observation-only. Provider V3 never publishes metadata
-                    // from active/decoder transitions; only Apple-owned setMetadata calls carry
-                    // lyricInfo during live playback.
-                    return result;
                 });
 
         Method release = MediaSession.class.getDeclaredMethod("release");
@@ -814,27 +755,7 @@ final class AppleProviderRuntimeV3 {
         }
     }
 
-    private boolean isTerminalPlaybackState(int state) {
-        // STATE_NONE can be transient during player/session hand-off. Treat only explicit
-        // STOPPED/ERROR as terminal; MediaSession.release() owns final teardown.
-        return state == PlaybackState.STATE_STOPPED ||
-                state == PlaybackState.STATE_ERROR;
-    }
 
-    private MediaSession selectSessionLocked() {
-        MediaSession fallback = null;
-        for (Map.Entry<MediaSession, SessionState> entry : sessions.entrySet()) {
-            MediaSession session = entry.getKey();
-            SessionState info = entry.getValue();
-            if (session == null || info == null || info.metadata == null || info.track == null) {
-                continue;
-            }
-            if (current != null && !current.same(info.track)) continue;
-            if (info.active && validPlaybackState(info.playbackState)) return session;
-            if (fallback == null) fallback = session;
-        }
-        return fallback;
-    }
 
     private void clearOwnedLyricsFromSessions() {
         clearOwnedLyricsInMemory();
@@ -982,15 +903,6 @@ final class AppleProviderRuntimeV3 {
                 payload.contains("\"source\":\"com.apple.android.music-v5\"");
     }
 
-    private static boolean validPlaybackState(int state) {
-        return state == PlaybackState.STATE_PLAYING ||
-                state == PlaybackState.STATE_PAUSED ||
-                state == PlaybackState.STATE_BUFFERING ||
-                state == PlaybackState.STATE_CONNECTING ||
-                state == PlaybackState.STATE_SKIPPING_TO_NEXT ||
-                state == PlaybackState.STATE_SKIPPING_TO_PREVIOUS ||
-                state == PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM;
-    }
 
     private static Object kotlinObject(Class<?> type) throws Exception {
         return type.getField("INSTANCE").get(null);
