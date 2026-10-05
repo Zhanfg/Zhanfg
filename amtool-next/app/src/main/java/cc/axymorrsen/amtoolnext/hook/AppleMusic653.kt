@@ -147,6 +147,7 @@ internal object AppleMusic653 {
 
     data class MediaApiAccess(
         val mediaApi: Any,
+        val storefrontField: java.lang.reflect.Field,
         val directQuery: Method,
     )
 
@@ -161,13 +162,30 @@ internal object AppleMusic653 {
         val getMediaApi = findMethod(companion.javaClass, "getMediaApi", 0)
             ?: error("MediaApiRepositoryHolder#getMediaApi unavailable")
         val mediaApi = requireNotNull(getMediaApi.invoke(companion))
+        val storefrontField = findField(mediaApi.javaClass, "s")
+            ?.takeIf { it.type == String::class.java }
+            ?: error("MediaApi storefront field s unavailable")
+        storefrontField.isAccessible = true
+
         val direct = findMethod(mediaApi.javaClass, "v", 3) { method ->
             val p = method.parameterTypes
             p[0] == String::class.java &&
                 Map::class.java.isAssignableFrom(p[1]) &&
                 p[2].name == "kotlin.coroutines.Continuation"
         } ?: error("MediaApi#v(String,Map,Continuation) unavailable")
-        return MediaApiAccess(mediaApi, direct)
+        return MediaApiAccess(mediaApi, storefrontField, direct)
+    }
+
+    private fun findField(type: Class<*>, name: String): java.lang.reflect.Field? {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredFields.firstOrNull { it.name == name }?.let { field ->
+                field.isAccessible = true
+                return field
+            }
+            current = current.superclass
+        }
+        return null
     }
 
     private fun findMethod(
