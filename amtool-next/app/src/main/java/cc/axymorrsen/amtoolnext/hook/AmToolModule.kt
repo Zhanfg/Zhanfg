@@ -479,59 +479,74 @@ class AmToolModule : XposedModule() {
      * request a UI rebind after the async lookup completes.
      */
     private fun installLocalizedMetadataOverlay(loader: ClassLoader) {
-        val getters = runCatching {
-            AppleMusic653.contentItemGetterMethods(loader)
+        val runtimeClasses = runCatching {
+            AppleMusic653.contentItemRuntimeClasses(loader)
         }.onFailure {
-            log(Log.ERROR, TAG, "content item getter resolve failed", it)
-        }.getOrDefault(emptyMap())
-        val identity = runCatching {
-            AppleMusic653.contentItemIdentityMethods(loader)
-        }.getOrDefault(emptyMap())
-        val notifyChange = runCatching {
-            AppleMusic653.contentItemNotifyChange(loader)
-        }.getOrNull()
+            log(Log.ERROR, TAG, "content item class resolve failed", it)
+        }.getOrDefault(emptyList())
 
-        if (getters.isEmpty() || identity.isEmpty()) {
-            log(Log.ERROR, TAG, "localized metadata overlay unavailable")
+        if (runtimeClasses.isEmpty()) {
+            log(Log.ERROR, TAG, "localized metadata overlay unavailable: no runtime classes")
             return
         }
 
-        getters.forEach { (name, method) ->
-            runCatching {
-                hook(method)
-                    .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
-                    .intercept { chain ->
-                        val original = chain.proceed()
-                        val config = HookConfigRuntime.current()
-                        if (!config.enabled || !config.chineseMetadata) {
-                            return@intercept original
+        val hookedMethods = HashSet<Method>()
+        runtimeClasses.forEach { type ->
+            val getters = AppleMusic653.contentItemGetterMethods(type)
+            val identity = AppleMusic653.contentItemIdentityMethods(type)
+            val notifyChange = AppleMusic653.contentItemNotifyChange(type)
+            if (getters.isEmpty() || identity.isEmpty()) return@forEach
+
+            getters.forEach { (name, method) ->
+                if (!hookedMethods.add(method)) return@forEach
+                runCatching {
+                    hook(method)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                        .intercept { chain ->
+                            val original = chain.proceed()
+                            val config = HookConfigRuntime.current()
+                            if (!config.enabled || !config.chineseMetadata) {
+                                return@intercept original
+                            }
+
+                            val item = chain.thisObject ?: return@intercept original
+                            val mediaId = contentItemMediaId(item, identity)
+                                ?: return@intercept original
+
+                            rememberLocalizedTarget(mediaId, item)
+                            val alias = localizedMetadata[mediaId]
+                            if (alias == null && mediaId !in localizedMisses) {
+                                requestLocalizedMetadata(
+                                    loader = loader,
+                                    mediaId = mediaId,
+                                    notifyChange = notifyChange,
+                                )
+                            }
+
+                            val replacement = when (name) {
+                                "getTitle", "getNowPlayingTitle" -> alias?.title
+                                "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
+                                "getCollectionName" -> alias?.album
+                                else -> null
+                            }?.takeIf(String::isNotBlank)
+
+                            replacement ?: original
                         }
-                        val item = chain.thisObject ?: return@intercept original
-                        val mediaId = contentItemMediaId(item, identity)
-                            ?: return@intercept original
-
-                        rememberLocalizedTarget(mediaId, item)
-                        val alias = localizedMetadata[mediaId]
-                        if (alias == null && mediaId !in localizedMisses) {
-                            requestLocalizedMetadata(
-                                loader = loader,
-                                mediaId = mediaId,
-                                notifyChange = notifyChange,
-                            )
-                        }
-
-                        val replacement = when (name) {
-                            "getTitle", "getNowPlayingTitle" -> alias?.title
-                            "getArtistName", "getNowPlayingSubtitle" -> alias?.artist
-                            "getCollectionName" -> alias?.album
-                            else -> null
-                        }?.takeIf(String::isNotBlank)
-
-                        replacement ?: original
-                    }
-                log(Log.INFO, TAG, "display metadata getter overlay installed: $name")
-            }.onFailure {
-                log(Log.ERROR, TAG, "display metadata getter overlay failed: $name", it)
+                    log(
+                        Log.INFO,
+                        TAG,
+                        "display metadata getter overlay installed: " +
+                            "${method.declaringClass.name}#$name",
+                    )
+                }.onFailure {
+                    log(
+                        Log.ERROR,
+                        TAG,
+                        "display metadata getter overlay failed: " +
+                            "${method.declaringClass.name}#$name",
+                        it,
+                    )
+                }
             }
         }
     }
