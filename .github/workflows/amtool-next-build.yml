@@ -43,12 +43,12 @@ jobs:
       - name: Upload AMTool V3
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-3.0.0-alpha5-debug
+          name: AMTool-Next-3.0.0-alpha6-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - name: Upload Provider V3 injector
         uses: actions/upload-artifact@v4
         with:
-          name: Apple-Provider-AMTool-RuntimeV3-2.0.0-alpha4
+          name: Apple-Provider-AMTool-RuntimeV3-2.0.0-alpha5
           path: amtool-next/provider-compat-injector/build/outputs/apk/debug/*.apk
           if-no-files-found: error
