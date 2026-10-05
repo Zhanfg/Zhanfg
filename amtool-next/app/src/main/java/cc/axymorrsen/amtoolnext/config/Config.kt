@@ -12,7 +12,6 @@ object ConfigKeys {
     const val AUTO_TRANSLATION = "auto_translation"
     const val PRONUNCIATION = "pronunciation"
     const val CHINESE_METADATA = "chinese_metadata"
-    const val FLOATING_BOTTOM_BAR = "floating_bottom_bar"
     const val REVISION = "__revision"
 }
 
@@ -22,7 +21,6 @@ data class HookConfig(
     val autoTranslation: Boolean = true,
     val pronunciation: Boolean = false,
     val chineseMetadata: Boolean = true,
-    val floatingBottomBar: Boolean = true,
     val revision: Long = 0,
 )
 
@@ -33,7 +31,6 @@ object ConfigCodec {
         autoTranslation = prefs.getBoolean(ConfigKeys.AUTO_TRANSLATION, true),
         pronunciation = prefs.getBoolean(ConfigKeys.PRONUNCIATION, false),
         chineseMetadata = prefs.getBoolean(ConfigKeys.CHINESE_METADATA, true),
-        floatingBottomBar = prefs.getBoolean(ConfigKeys.FLOATING_BOTTOM_BAR, true),
         revision = prefs.getLong(ConfigKeys.REVISION, 0L),
     )
 
@@ -43,7 +40,6 @@ object ConfigCodec {
         .putBoolean(ConfigKeys.AUTO_TRANSLATION, config.autoTranslation)
         .putBoolean(ConfigKeys.PRONUNCIATION, config.pronunciation)
         .putBoolean(ConfigKeys.CHINESE_METADATA, config.chineseMetadata)
-        .putBoolean(ConfigKeys.FLOATING_BOTTOM_BAR, config.floatingBottomBar)
         .putLong(ConfigKeys.REVISION, config.revision)
 }
 
