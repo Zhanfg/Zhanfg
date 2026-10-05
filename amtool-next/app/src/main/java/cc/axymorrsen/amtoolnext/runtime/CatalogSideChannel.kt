@@ -11,7 +11,6 @@ import java.util.LinkedHashMap
 import java.util.LinkedHashSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -50,7 +49,6 @@ internal class CatalogSideChannel(
 
     private val main = Handler(Looper.getMainLooper())
     private val sequence = AtomicLong()
-    private val setupLocalizedCalls = AtomicInteger()
     private val access by lazy { AppleMusic653.mediaApiAccess(loader) }
 
     private val pendingLock = Any()
@@ -59,23 +57,15 @@ internal class CatalogSideChannel(
 
     private val requestStorefronts = ConcurrentHashMap<String, String>()
 
-    @Volatile
-    private var accountStorefront: String? = null
-
     fun installRouter() {
-        val access = access
-        accountStorefront = runCatching {
-            access.storefrontField.get(access.mediaApi) as? String
-        }.getOrNull()?.trim()?.takeIf(String::isNotEmpty)
-
         val methods = AppleMusic653.catalogRequestExecutors(loader)
         require(methods.isNotEmpty()) { "6.5.3 catalog executors unavailable" }
         methods.forEach(::installExecutor)
 
         logger(
             Log.INFO,
-            "catalog side-channel installed executors=${methods.size} " +
-                "accountStorefront=${accountStorefront ?: "unknown"}",
+            "catalog side-channel installed executors=${methods.size}; " +
+                "native storefront state is never mutated",
             null,
         )
     }
@@ -125,7 +115,6 @@ internal class CatalogSideChannel(
 
     private fun resolveBatch(batch: Map<String, Pending>) {
         val requestedIds = batch.keys.toList()
-        val accountTarget = accountStorefront
 
         query(
             path = "songs",
@@ -135,7 +124,7 @@ internal class CatalogSideChannel(
                 "platform" to "android",
                 "include[songs]" to "artists",
             ),
-            targetStorefront = accountTarget,
+            targetStorefront = null,
         ) { accountResponse ->
             val accountEntities = parseEntities(accountResponse)
             val identityByRequested = requestedIds.associateWith { requestedId ->
@@ -331,20 +320,6 @@ internal class CatalogSideChannel(
                     return@intercept chain.proceed(args)
                 }
 
-                // MediaApi.s is only seeded for the synchronous setup of our own request.
-                // An unrelated native request that races that tiny window stays on the real
-                // account storefront.
-                val account = accountStorefront
-                if (
-                    setupLocalizedCalls.get() > 0 &&
-                    !account.isNullOrBlank() &&
-                    chain.args.getOrNull(3)?.toString() != account
-                ) {
-                    val args = chain.args.toTypedArray()
-                    args[3] = account
-                    return@intercept chain.proceed(args)
-                }
-
                 chain.proceed()
             }
     }
@@ -408,19 +383,10 @@ internal class CatalogSideChannel(
         }.also { main.postDelayed(it, QUERY_TIMEOUT_MS) }
 
         runCatching {
-            if (targetStorefront == null) {
-                access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
-            } else {
-                val previous = access.storefrontField.get(access.mediaApi) as? String
-                setupLocalizedCalls.incrementAndGet()
-                try {
-                    access.storefrontField.set(access.mediaApi, targetStorefront)
-                    access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
-                } finally {
-                    runCatching { access.storefrontField.set(access.mediaApi, previous) }
-                    setupLocalizedCalls.decrementAndGet()
-                }
-            }
+            // Never mutate MediaApi's shared storefront field. The private token is carried
+            // through the direct query and the exact 6.5.3 executor rewrites only that request's
+            // storefront argument. Native playback/catalog requests therefore cannot observe CN.
+            access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
         }.onSuccess { immediate ->
             if (!isCoroutineSuspended(immediate)) finish(immediate)
         }.onFailure { error ->
