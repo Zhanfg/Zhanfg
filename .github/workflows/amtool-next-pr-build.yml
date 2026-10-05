@@ -59,7 +59,7 @@ jobs:
           name: Android-Build-Tools-37-Signing
           path: |
             ${{ env.ANDROID_HOME }}/build-tools/37.0.0/zipalign
-            ${{ env.ANDROID_HOME }}/build-tools/37.0.0/lib/apksigner.jar
+            ${{ env.ANDROID_HOME }}/build-tools/37.0.0/lib/apksigner.jar\n            ${{ env.ANDROID_HOME }}/build-tools/37.0.0/lib64/libc++.so
           if-no-files-found: error
 
   apple-provider-compat:
