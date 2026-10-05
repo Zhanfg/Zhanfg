@@ -61,3 +61,14 @@ the same generation before doing anything.
 
 This is an architectural rewrite, so the AMTool version is 3.0.0-alpha1 rather than another
 2.0.0 hotfix.
+
+
+## Alpha3 corrections
+
+- Localized metadata is coalesced into short batches instead of issuing account+CN requests from
+  every title getter.
+- CN lookup tries all stable Apple catalog identifiers first. ISRC is fallback-only.
+- Artist Top Songs has a final visible-row projection because 6.5.3 can copy the original title
+  back through Epoxy/DataBinding after model construction.
+- Floating bottom chrome owns only presentation. The full-width native backing layers are removed,
+  mini-player and navigation form one segmented shell, and no window-focus polling is used.
