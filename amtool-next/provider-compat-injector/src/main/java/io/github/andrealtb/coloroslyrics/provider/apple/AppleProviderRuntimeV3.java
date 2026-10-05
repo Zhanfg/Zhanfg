@@ -293,8 +293,6 @@ final class AppleProviderRuntimeV3 {
                     if (isTerminalPlaybackState(value)) {
                         invalidatePublication();
                         clearOwnedLyricsFromSession(session);
-                    } else {
-                        publishLyricsIfPossible();
                     }
                     return result;
                 });
@@ -311,12 +309,9 @@ final class AppleProviderRuntimeV3 {
                     synchronized (lock) {
                         sessionState(session).active = active;
                     }
-                    // setActive(false) can be transient while Apple swaps route/decoder/session
-                    // state (including Dolby/variant hand-offs). Never write metadata from that
-                    // transition. Session release/task removal/real STOPPED handle retraction.
-                    if (active) {
-                        publishLyricsIfPossible();
-                    }
+                    // Session activity is observation-only. Provider V3 never publishes metadata
+                    // from active/decoder transitions; only Apple-owned setMetadata calls carry
+                    // lyricInfo during live playback.
                     return result;
                 });
 
@@ -670,7 +665,7 @@ final class AppleProviderRuntimeV3 {
         }
 
         transitionTo(track, "media-session", true);
-        publishLyricsIfPossible();
+        attachReadyLyricsToHostMetadata(session, metadata);
     }
 
     private void transitionTo(CanonicalTrack incoming, String source, boolean requestNow) {
@@ -898,29 +893,35 @@ final class AppleProviderRuntimeV3 {
                 readyGeneration = ticket.generation;
                 leaseEpoch++;
             }
-            publishLyricsIfPossible();
+            module.log(
+                    Log.INFO,
+                    TAG,
+                    "lyrics ready generation=" + ticket.generation +
+                            " waiting for host metadata carrier lines=" + lines.size()
+            );
         } catch (Throwable error) {
             module.log(Log.ERROR, TAG, "lyrics callback parse failed", error);
         }
     }
 
     /**
-     * Publish the full lyric payload at most once for each live MediaMetadata object.
+     * Attach ready lyrics only while Apple Music itself is already publishing MediaMetadata.
      *
-     * The previous rolling-lease implementation rewrote MediaSession metadata every 500 ms and
-     * again at every lyric-window boundary. On Apple Music 6.5.3 this can race the playback
-     * service's own metadata/route work (especially around Dolby/variant transitions) and has been
-     * observed to leave playback paused. V3 alpha6 treats MediaSession as an event boundary, not a
-     * timer: publish on lyrics-ready or host metadata replacement, clear only on track/task/session
-     * termination.
+     * Calling MediaSession#setMetadata from the provider while playback is active can race
+     * Apple Music's decoder/session hand-off. The device symptom is a track that advances only
+     * a few seconds and then behaves like a preview until a lyric seek forces another player
+     * transition. V3 alpha6+ therefore treats Apple's setMetadata call as the only live carrier:
+     * mutate the incoming object before the host call proceeds, but never issue a second
+     * setMetadata call from the module during active playback.
      */
-    private void publishLyricsIfPossible() {
+    private void attachReadyLyricsToHostMetadata(
+            MediaSession session,
+            MediaMetadata metadata
+    ) {
         final List<?> lines;
         final long gen;
         final long epoch;
         final Object trackIdentity;
-        final MediaSession session;
-        final MediaMetadata metadata;
 
         synchronized (lock) {
             if (!hostTaskPresent ||
@@ -930,19 +931,16 @@ final class AppleProviderRuntimeV3 {
                 return;
             }
 
-            session = selectSessionLocked();
-            if (session == null) return;
             SessionState info = sessions.get(session);
-            if (info == null || info.metadata == null || !info.active) return;
-            if (!validPlaybackState(info.playbackState)) return;
+            if (info == null || info.track == null || current == null ||
+                    !current.same(info.track)) {
+                return;
+            }
 
-            // A host metadata replacement may drop lyricInfo; otherwise do not rewrite the
-            // MediaSession again for the same track.
-            if (isOwnedLyricInfo(info.metadata.getString(LYRIC_INFO))) return;
+            if (isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) return;
 
             lines = (List<?>) readyLines;
             if (lines.isEmpty()) return;
-            metadata = info.metadata;
             gen = generation;
             epoch = leaseEpoch;
             trackIdentity = currentTrackIdentity;
@@ -961,18 +959,37 @@ final class AppleProviderRuntimeV3 {
             );
 
             synchronized (lock) {
-                if (gen != generation || epoch != leaseEpoch || !hostTaskPresent) return;
-                if (!isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) return;
+                if (gen != generation || epoch != leaseEpoch || !hostTaskPresent) {
+                    clearOwnedLyricInfo(metadata);
+                    return;
+                }
             }
 
-            writeSessionMetadata(session, metadata);
-            module.log(
-                    Log.INFO,
-                    TAG,
-                    "lyrics published once generation=" + gen + " lines=" + lines.size()
-            );
+            if (isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) {
+                module.log(
+                        Log.INFO,
+                        TAG,
+                        "lyrics attached to host metadata generation=" + gen +
+                                " lines=" + lines.size()
+                );
+            }
         } catch (Throwable error) {
-            module.log(Log.ERROR, TAG, "lyrics publication failed", error);
+            module.log(Log.ERROR, TAG, "host-owned lyric attachment failed", error);
+        }
+    }
+
+    /**
+     * Strip module-owned lyricInfo from cached Java objects without publishing another
+     * MediaSession metadata transaction. The next Apple-owned metadata update carries the clean
+     * object. Explicit STOPPED/release/task-removal paths may still call setMetadata because
+     * playback is no longer active.
+     */
+    private void clearOwnedLyricsInMemory() {
+        synchronized (lock) {
+            for (SessionState state : sessions.values()) {
+                if (state == null || state.metadata == null) continue;
+                clearOwnedLyricInfo(state.metadata);
+            }
         }
     }
 
