@@ -81,7 +81,7 @@ class AmToolModule : XposedModule() {
         installLocalizedMetadataOverlay(loader)
 
         installTranslationPreferenceGuard(loader)
-        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3-hotfix3 hooks installed")
+        log(Log.INFO, TAG, "Apple Music 6.5.3 alpha3-hotfix5 hooks installed")
     }
 
     private fun installLyricsLanguageHook(loader: ClassLoader) {
@@ -580,68 +580,66 @@ class AmToolModule : XposedModule() {
         mainHandler.post {
             runCatching {
                 val access = AppleMusic653.mediaApiAccess(loader)
-                val token = "amtn-${sideChannelSequence.incrementAndGet().toString(36)}-$mediaId"
-                val query = linkedMapOf<String, String>(
-                    "ids" to mediaId,
-                    "l" to SIDE_CHANNEL_LANGUAGE,
-                    "platform" to "android",
-                    "include[songs]" to "artists",
-                    SIDE_CHANNEL_TOKEN to token,
-                )
-                val continuationType = access.directQuery.parameterTypes[2]
-                val context = emptyCoroutineContext(loader, continuationType)
-                val completion = AtomicBoolean(false)
 
-                fun complete(response: Any?) {
-                    if (!completion.compareAndSet(false, true)) return
-                    localizedPending.remove(mediaId)
-                    val alias = parseLocalizedAlias(response, mediaId)
-                    if (alias == null) {
+                // Apple Music catalog IDs can differ by storefront. Resolve the account
+                // song's ISRC first, then use that stable recording identity in CN.
+                performCatalogQuery(
+                    loader = loader,
+                    access = access,
+                    path = "songs",
+                    query = linkedMapOf(
+                        "ids" to mediaId,
+                        "platform" to "android",
+                        "include[songs]" to "artists",
+                    ),
+                    storefront = null,
+                ) { accountResponse ->
+                    val isrc = extractCatalogIsrc(accountResponse, mediaId)
+                    if (isrc.isNullOrBlank()) {
+                        localizedPending.remove(mediaId)
                         localizedMisses += mediaId
-                        log(Log.INFO, TAG, "side-channel metadata miss id=$mediaId")
-                        return
+                        log(Log.INFO, TAG, "localized metadata: account ISRC missing id=$mediaId")
+                        return@performCatalogQuery
                     }
-                    localizedMetadata[mediaId] = alias
-                    localizedMisses.remove(mediaId)
-                    log(
-                        Log.INFO,
-                        TAG,
-                        "side-channel metadata hit id=$mediaId " +
-                            "title=${alias.title} artist=${alias.artist} album=${alias.album}",
-                    )
-                    notifyLocalizedTargets(mediaId, notifyChange)
-                }
 
-                val continuation = Proxy.newProxyInstance(
-                    continuationType.classLoader ?: loader,
-                    arrayOf(continuationType),
-                ) { proxy, method, args ->
-                    when (method.name) {
-                        "getContext" -> context
-                        "resumeWith" -> {
-                            val result = args?.firstOrNull()
-                            if (result?.javaClass?.name != "kotlin.Result\$Failure") {
-                                complete(result)
-                            } else {
-                                localizedPending.remove(mediaId)
-                            }
-                            null
+                    val token =
+                        "amtn-${sideChannelSequence.incrementAndGet().toString(36)}-$mediaId"
+                    performCatalogQuery(
+                        loader = loader,
+                        access = access,
+                        path = "songs",
+                        query = linkedMapOf(
+                            "filter[isrc]" to isrc,
+                            "l" to SIDE_CHANNEL_LANGUAGE,
+                            "platform" to "android",
+                            "include[songs]" to "artists",
+                            "limit" to "1",
+                            SIDE_CHANNEL_TOKEN to token,
+                        ),
+                        storefront = SIDE_CHANNEL_STOREFRONT,
+                    ) { cnResponse ->
+                        localizedPending.remove(mediaId)
+                        val alias = parseLocalizedAlias(cnResponse, requestedId = null)
+                        if (alias == null) {
+                            localizedMisses += mediaId
+                            log(
+                                Log.INFO,
+                                TAG,
+                                "side-channel metadata miss id=$mediaId isrc=$isrc",
+                            )
+                            return@performCatalogQuery
                         }
-                        "equals" -> proxy === args?.firstOrNull()
-                        "hashCode" -> System.identityHashCode(proxy)
-                        "toString" -> "AMToolMetadataContinuation($mediaId)"
-                        else -> null
-                    }
-                }
 
-                val immediate = access.directQuery.invoke(
-                    access.mediaApi,
-                    "songs",
-                    query,
-                    continuation,
-                )
-                if (!isCoroutineSuspended(immediate)) {
-                    complete(immediate)
+                        localizedMetadata[mediaId] = alias
+                        localizedMisses.remove(mediaId)
+                        log(
+                            Log.INFO,
+                            TAG,
+                            "side-channel metadata hit id=$mediaId isrc=$isrc " +
+                                "title=${alias.title} artist=${alias.artist} album=${alias.album}",
+                        )
+                        notifyLocalizedTargets(mediaId, notifyChange)
+                    }
                 }
             }.onFailure {
                 localizedPending.remove(mediaId)
@@ -650,7 +648,89 @@ class AmToolModule : XposedModule() {
         }
     }
 
-    private fun parseLocalizedAlias(response: Any?, requestedId: String): LocalizedAlias? {
+    private fun performCatalogQuery(
+        loader: ClassLoader,
+        access: AppleMusic653.MediaApiAccess,
+        path: String,
+        query: LinkedHashMap<String, String>,
+        storefront: String?,
+        onResult: (Any?) -> Unit,
+    ) {
+        val continuationType = access.directQuery.parameterTypes[2]
+        val context = emptyCoroutineContext(loader, continuationType)
+        val completion = AtomicBoolean(false)
+
+        fun complete(response: Any?) {
+            if (!completion.compareAndSet(false, true)) return
+            mainHandler.post { onResult(response) }
+        }
+
+        val continuation = Proxy.newProxyInstance(
+            continuationType.classLoader ?: loader,
+            arrayOf(continuationType),
+        ) { proxy, method, args ->
+            when (method.name) {
+                "getContext" -> context
+                "resumeWith" -> {
+                    val result = args?.firstOrNull()
+                    if (result?.javaClass?.name == "kotlin.Result\$Failure") {
+                        complete(null)
+                    } else {
+                        complete(result)
+                    }
+                    null
+                }
+                "equals" -> proxy === args?.firstOrNull()
+                "hashCode" -> System.identityHashCode(proxy)
+                "toString" -> "AMToolCatalogContinuation($path)"
+                else -> null
+            }
+        }
+
+        val previousStorefront = access.storefrontField.get(access.mediaApi) as? String
+        val immediate = try {
+            if (storefront != null) {
+                access.storefrontField.set(access.mediaApi, storefront)
+            }
+            access.directQuery.invoke(
+                access.mediaApi,
+                path,
+                query,
+                continuation,
+            )
+        } finally {
+            if (storefront != null) {
+                access.storefrontField.set(access.mediaApi, previousStorefront)
+            }
+        }
+
+        if (!isCoroutineSuspended(immediate)) {
+            complete(immediate)
+        }
+    }
+
+    private fun extractCatalogIsrc(response: Any?, requestedId: String): String? {
+        val entity = catalogEntity(response, requestedId) ?: return null
+        val attributes = callMember(entity, "getAttributes") ?: return null
+        return (callMember(attributes, "getIsrc") as? String)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+    }
+
+    private fun parseLocalizedAlias(
+        response: Any?,
+        requestedId: String?,
+    ): LocalizedAlias? {
+        val entity = catalogEntity(response, requestedId) ?: return null
+        val attributes = callMember(entity, "getAttributes") ?: return null
+        val title = (callMember(attributes, "getName") as? String).orEmpty().trim()
+        val artist = (callMember(attributes, "getArtistName") as? String).orEmpty().trim()
+        val album = (callMember(attributes, "getAlbumName") as? String).orEmpty().trim()
+        if (title.isEmpty() && artist.isEmpty() && album.isEmpty()) return null
+        return LocalizedAlias(title, artist, album)
+    }
+
+    private fun catalogEntity(response: Any?, requestedId: String?): Any? {
         response ?: return null
         val data = callMember(response, "getData")
         val entities = when (data) {
@@ -659,15 +739,12 @@ class AmToolModule : XposedModule() {
             is Map<*, *> -> data.values.filterNotNull()
             else -> emptyList()
         }
-        val entity = entities.firstOrNull { candidate ->
-            callMember(candidate, "getId")?.toString() == requestedId
-        } ?: entities.firstOrNull() ?: return null
-        val attributes = callMember(entity, "getAttributes") ?: return null
-        val title = (callMember(attributes, "getName") as? String).orEmpty().trim()
-        val artist = (callMember(attributes, "getArtistName") as? String).orEmpty().trim()
-        val album = (callMember(attributes, "getAlbumName") as? String).orEmpty().trim()
-        if (title.isEmpty() && artist.isEmpty() && album.isEmpty()) return null
-        return LocalizedAlias(title, artist, album)
+        if (entities.isEmpty()) return null
+        if (requestedId == null) return entities.first()
+        return entities.firstOrNull { candidate ->
+            callMember(candidate, "getId")?.toString() == requestedId ||
+                callMember(candidate, "getSubscriptionStoreId")?.toString() == requestedId
+        } ?: entities.firstOrNull()
     }
 
     private fun notifyLocalizedTargets(mediaId: String, notifyChange: Method?) {
