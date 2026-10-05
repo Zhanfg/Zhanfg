@@ -27,6 +27,8 @@ internal object AppleMusic653 {
     const val ARTIST_BASE_CONTROLLER =
         "com.apple.android.music.profiles.BaseProfileEpoxyController"
     const val ARTIST_TOP_SONG_MODEL = "com.apple.android.music.e1"
+    const val STACKED_NAVIGATION_HOLDER =
+        "com.apple.android.music.common.activity.PlayerActivity$StackedBottomNavigationHolder"
 
     private val CONTENT_ITEM_CLASSES = listOf(
         "com.apple.android.music.model.BaseContentItem",
@@ -191,6 +193,26 @@ internal object AppleMusic653 {
         title.isAccessible = true
 
         return ArtistTopSongSurface(build, bind, title)
+    }
+
+    fun stackedNavigationSlide(loader: ClassLoader): Method =
+        loader.loadClass(STACKED_NAVIGATION_HOLDER).declaredMethods.single { method ->
+            method.name == "c" &&
+                method.parameterCount == 1 &&
+                method.parameterTypes[0] == Float::class.javaPrimitiveType &&
+                method.returnType == Void.TYPE
+        }.apply { isAccessible = true }
+
+    fun mediaEntityAttributes(entity: Any): Any? =
+        findMethod(entity.javaClass, "getAttributes", 0)
+            ?.let { method -> runCatching { method.invoke(entity) }.getOrNull() }
+
+    fun mediaEntityIsrc(entity: Any): String? {
+        val attributes = mediaEntityAttributes(entity) ?: return null
+        return findMethod(attributes.javaClass, "getIsrc", 0)
+            ?.let { method -> runCatching { method.invoke(attributes) as? String }.getOrNull() }
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
     }
 
     fun mediaEntityCatalogId(entity: Any): String? {
