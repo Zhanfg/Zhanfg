@@ -655,25 +655,47 @@ final class AppleProviderRuntimeV3 {
         }
     }
 
-    private void publishPendingIfPossible() {
-        final Object lines;
+    private void publishLeaseIfPossible() {
+        final List<?> fullLines;
+        final List<?> leaseLines;
         final long gen;
+        final long epoch;
         final Object trackIdentity;
         final MediaSession session;
         final MediaMetadata metadata;
+        final SessionState info;
+        final String windowKey;
 
         synchronized (lock) {
-            if (pendingLines == null || pendingGeneration != generation ||
+            if (!(readyLines instanceof List) ||
+                    readyGeneration != generation ||
                     currentTrackIdentity == null) {
                 return;
             }
             session = selectSessionLocked();
             if (session == null) return;
-            SessionState info = sessions.get(session);
-            if (info == null || info.metadata == null) return;
+            info = sessions.get(session);
+            if (info == null || info.metadata == null || !info.active) return;
+            if (!validPlaybackState(info.playbackState)) return;
+
+            fullLines = (List<?>) readyLines;
+            long positionMs = estimatedPositionMs(info.playback);
+            leaseLines = leaseWindow(fullLines, positionMs);
+            if (leaseLines.isEmpty()) return;
+
+            int first = fullLines.indexOf(leaseLines.get(0));
+            int last = fullLines.indexOf(leaseLines.get(leaseLines.size() - 1));
+            windowKey = generation + ":" + first + ":" + last;
+
+            // Do not churn MediaSession metadata when the lease window has not advanced.
+            if (windowKey.equals(lastLeaseWindowKey) &&
+                    isOwnedLyricInfo(info.metadata.getString(LYRIC_INFO))) {
+                return;
+            }
+
             metadata = info.metadata;
-            lines = pendingLines;
             gen = generation;
+            epoch = leaseEpoch;
             trackIdentity = currentTrackIdentity;
         }
 
@@ -682,25 +704,125 @@ final class AppleProviderRuntimeV3 {
                     publisherInstance,
                     metadata,
                     trackIdentity,
-                    lines,
+                    leaseLines,
                     gen,
                     generationPolicy,
                     HOST,
                     HOST
             );
-            if (isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) {
-                synchronized (lock) {
-                    if (gen == generation) {
-                        pendingLines = null;
-                        pendingGeneration = 0L;
-                    }
+            synchronized (lock) {
+                if (gen != generation || epoch != leaseEpoch) return;
+                if (isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) {
+                    lastLeaseWindowKey = windowKey;
+                } else {
+                    return;
                 }
-                writeSessionMetadata(session, metadata);
-                module.log(Log.INFO, TAG, "lyrics published generation=" + gen);
             }
+            writeSessionMetadata(session, metadata);
+            module.log(
+                    Log.INFO,
+                    TAG,
+                    "lyrics lease published generation=" + gen +
+                            " window=" + windowKey +
+                            " lines=" + leaseLines.size()
+            );
         } catch (Throwable error) {
-            module.log(Log.ERROR, TAG, "lyrics publication failed", error);
+            module.log(Log.ERROR, TAG, "lyrics lease publication failed", error);
         }
+    }
+
+    private void scheduleLeaseHeartbeat() {
+        final long epoch;
+        final long gen;
+
+        synchronized (lock) {
+            if (!(readyLines instanceof List) ||
+                    readyGeneration != generation ||
+                    lyricGate.phase() != AppleLyricGenerationGate.Phase.READY) {
+                return;
+            }
+            MediaSession session = selectSessionLocked();
+            if (session == null) return;
+            SessionState info = sessions.get(session);
+            if (info == null || !info.active ||
+                    info.playbackState != PlaybackState.STATE_PLAYING) {
+                return;
+            }
+
+            epoch = leaseEpoch;
+            gen = generation;
+            if (heartbeatEpoch == epoch) return;
+            heartbeatEpoch = epoch;
+        }
+
+        main.postDelayed(() -> {
+            synchronized (lock) {
+                if (heartbeatEpoch == epoch) heartbeatEpoch = -1L;
+                if (epoch != leaseEpoch || gen != generation) return;
+            }
+            publishLeaseIfPossible();
+            scheduleLeaseHeartbeat();
+        }, LEASE_HEARTBEAT_MS);
+    }
+
+    private void invalidateLease() {
+        synchronized (lock) {
+            leaseEpoch++;
+            heartbeatEpoch = -1L;
+            lastLeaseWindowKey = null;
+        }
+    }
+
+    private List<?> leaseWindow(List<?> lines, long positionMs) {
+        if (lines.isEmpty()) return List.of();
+
+        long startMs = Math.max(0L, positionMs - LEASE_PAST_MS);
+        long endMs = positionMs + LEASE_FUTURE_MS;
+        ArrayList<Object> window = new ArrayList<>();
+
+        for (Object line : lines) {
+            long begin = number(call(line, "getBegin"));
+            long end = number(call(line, "getEnd"));
+            if (end <= 0L) end = begin;
+            if (end >= startMs && begin <= endMs) {
+                window.add(line);
+            }
+        }
+
+        if (!window.isEmpty()) return window;
+
+        // Before the first line or inside a long instrumental gap, keep only the nearest next line.
+        Object nearest = null;
+        long nearestBegin = Long.MAX_VALUE;
+        for (Object line : lines) {
+            long begin = number(call(line, "getBegin"));
+            if (begin >= positionMs && begin < nearestBegin) {
+                nearest = line;
+                nearestBegin = begin;
+            }
+        }
+        if (nearest != null && nearestBegin <= positionMs + LEASE_FUTURE_MS) {
+            window.add(nearest);
+        }
+        return window;
+    }
+
+    private long estimatedPositionMs(PlaybackState state) {
+        if (state == null) return 0L;
+        long position = Math.max(0L, state.getPosition());
+        if (state.getState() != PlaybackState.STATE_PLAYING) return position;
+
+        long updatedAt = state.getLastPositionUpdateTime();
+        if (updatedAt <= 0L) return position;
+        long elapsed = Math.max(0L, SystemClock.elapsedRealtime() - updatedAt);
+        float speed = state.getPlaybackSpeed();
+        return Math.max(0L, position + (long) (elapsed * speed));
+    }
+
+    private boolean isTerminalPlaybackState(int state) {
+        return state == PlaybackState.STATE_NONE ||
+                state == PlaybackState.STATE_STOPPED ||
+                state == PlaybackState.STATE_ERROR;
     }
 
     private MediaSession selectSessionLocked() {
