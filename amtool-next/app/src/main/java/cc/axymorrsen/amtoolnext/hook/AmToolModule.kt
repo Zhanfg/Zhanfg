@@ -226,13 +226,24 @@ class AmToolModule : XposedModule() {
                     if (!config.enabled || !config.chineseMetadata) return@intercept chain.proceed()
 
                     val args = chain.args.toTypedArray()
-                    val oldStorefront = args.getOrNull(3)?.toString()
-                    args[3] = LanguagePolicy.CONTENT_STOREFRONT
-
                     val queryIndex = method.parameterTypes.indices
                         .firstOrNull { index ->
                             index > 3 && Map::class.java.isAssignableFrom(method.parameterTypes[index])
                         }
+
+                    if (shouldPreserveAccountStorefront(method, args, queryIndex)) {
+                        log(
+                            Log.INFO,
+                            TAG,
+                            "playback-sensitive catalog request preserved: " +
+                                "${method.declaringClass.name}#${method.name}",
+                        )
+                        return@intercept chain.proceed()
+                    }
+
+                    val oldStorefront = args.getOrNull(3)?.toString()
+                    args[3] = LanguagePolicy.CONTENT_STOREFRONT
+
                     if (queryIndex != null) {
                         @Suppress("UNCHECKED_CAST")
                         val oldQuery = args.getOrNull(queryIndex) as? Map<Any?, Any?>
@@ -294,7 +305,14 @@ class AmToolModule : XposedModule() {
             if (!uri.host.orEmpty().contains("apple", ignoreCase = true)) return
 
             val segments = uri.pathSegments.toMutableList()
-            if (isLyricsPath(segments) || isAccountScopedPlaybackPath(segments)) return
+            if (
+                isLyricsPath(segments) ||
+                isAccountScopedPlaybackPath(segments) ||
+                isDirectSongResourcePath(segments) ||
+                hasPlaybackSensitiveQuery(uri)
+            ) {
+                return
+            }
 
             val pathHasStorefront =
                 segments.size > 2 &&
@@ -410,6 +428,49 @@ class AmToolModule : XposedModule() {
             }
             result
         }.getOrElse { emptyList() }
+    }
+
+    private fun shouldPreserveAccountStorefront(
+        method: Method,
+        args: Array<Any?>,
+        queryIndex: Int?,
+    ): Boolean {
+        if (method.declaringClass.name == "v8.D" && method.name == "d") {
+            val tail = args.getOrNull(4)?.toString().orEmpty().trimStart('/')
+            if (tail == "songs" || tail.startsWith("songs/")) return true
+        }
+        if (queryIndex != null) {
+            @Suppress("UNCHECKED_CAST")
+            val query = args.getOrNull(queryIndex) as? Map<Any?, Any?>
+            if (query != null && query.entries.any { (key, value) ->
+                    isPlaybackSensitiveToken(key?.toString()) ||
+                        isPlaybackSensitiveToken(value?.toString())
+                }
+            ) return true
+        }
+        return false
+    }
+
+    private fun isDirectSongResourcePath(segments: List<String>): Boolean =
+        segments.getOrNull(1) == "catalog" &&
+            segments.getOrNull(3) == "songs" &&
+            segments.size >= 5
+
+    private fun hasPlaybackSensitiveQuery(uri: Uri): Boolean =
+        uri.queryParameterNames.any { name ->
+            isPlaybackSensitiveToken(name) ||
+                uri.getQueryParameters(name).any(::isPlaybackSensitiveToken)
+        }
+
+    private fun isPlaybackSensitiveToken(value: String?): Boolean {
+        val normalized = value.orEmpty().lowercase()
+        return normalized.contains("playparam") ||
+            normalized.contains("playback") ||
+            normalized.contains("extendedasset") ||
+            normalized.contains("asseturl") ||
+            normalized.contains("audio-variant") ||
+            normalized.contains("audiovariant") ||
+            normalized.contains("stream")
     }
 
     private fun isLyricsPath(segments: List<String>): Boolean =
