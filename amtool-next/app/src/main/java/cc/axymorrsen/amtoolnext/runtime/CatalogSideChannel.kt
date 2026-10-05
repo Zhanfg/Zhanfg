@@ -48,6 +48,7 @@ internal class CatalogSideChannel(
 
     private data class Pending(
         val callbacks: MutableList<(Alias?) -> Unit> = mutableListOf(),
+        var isrcHint: String? = null,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -80,16 +81,26 @@ internal class CatalogSideChannel(
         )
     }
 
-    fun resolve(mediaId: String, callback: (Alias?) -> Unit) {
+    fun resolve(mediaId: String, callback: (Alias?) -> Unit) =
+        resolve(mediaId, null, callback)
+
+    fun resolve(
+        mediaId: String,
+        isrcHint: String?,
+        callback: (Alias?) -> Unit,
+    ) {
         val id = mediaId.trim()
         if (id.isEmpty() || !id.all(Char::isDigit)) {
             main.post { callback(null) }
             return
         }
 
+        val hint = isrcHint?.trim()?.takeIf(String::isNotEmpty)
         var schedule = false
         synchronized(pendingLock) {
-            pending.getOrPut(id) { Pending() }.callbacks += callback
+            val request = pending.getOrPut(id) { Pending() }
+            request.callbacks += callback
+            if (request.isrcHint == null && hint != null) request.isrcHint = hint
             if (!flushScheduled) {
                 flushScheduled = true
                 schedule = true
@@ -118,17 +129,10 @@ internal class CatalogSideChannel(
 
     private fun resolveBatch(batch: Map<String, Pending>) {
         val requestedIds = batch.keys.toList()
+        val hintedIds = batch.filterValues { it.isrcHint != null }.keys
+        val accountLookupIds = requestedIds.filterNot(hintedIds::contains)
 
-        query(
-            path = "songs",
-            query = linkedMapOf(
-                "ids" to requestedIds.joinToString(","),
-                "platform" to "android",
-                "include[songs]" to "artists",
-            ),
-            localized = false,
-        ) { accountResponse ->
-            val accountEntities = parseEntities(accountResponse)
+        fun continueWithIdentity(accountEntities: List<EntitySnapshot>) {
             val identityByRequested = requestedIds.associateWith { requestedId ->
                 accountEntities.firstOrNull { requestedId in it.ids }
             }
@@ -146,7 +150,7 @@ internal class CatalogSideChannel(
 
             if (allLookupIds.isEmpty()) {
                 finishBatch(batch, emptyMap())
-                return@query
+                return
             }
 
             query(
@@ -183,6 +187,7 @@ internal class CatalogSideChannel(
 
                 resolveByIsrcFallback(
                     unresolved = unresolved,
+                    batch = batch,
                     identityByRequested = identityByRequested,
                     resolved = resolved,
                 ) { completed ->
@@ -190,16 +195,38 @@ internal class CatalogSideChannel(
                 }
             }
         }
+
+        // Artist Top Songs already exposes ISRC in its MediaEntity. Avoid an extra account
+        // catalog round-trip for those visible rows; ordinary model/getter requests still use
+        // one coalesced account batch to recover alternate Apple IDs and ISRC.
+        if (accountLookupIds.isEmpty()) {
+            continueWithIdentity(emptyList())
+            return
+        }
+
+        query(
+            path = "songs",
+            query = linkedMapOf(
+                "ids" to accountLookupIds.joinToString(","),
+                "platform" to "android",
+                "include[songs]" to "artists",
+            ),
+            localized = false,
+        ) { accountResponse ->
+            continueWithIdentity(parseEntities(accountResponse))
+        }
     }
 
     private fun resolveByIsrcFallback(
         unresolved: List<String>,
+        batch: Map<String, Pending>,
         identityByRequested: Map<String, EntitySnapshot?>,
         resolved: LinkedHashMap<String, Alias>,
         onDone: (Map<String, Alias>) -> Unit,
     ) {
         val candidates = unresolved.mapNotNull { id ->
-            identityByRequested[id]?.isrc?.let { id to it }
+            val isrc = batch[id]?.isrcHint ?: identityByRequested[id]?.isrc
+            isrc?.let { id to it }
         }
         if (candidates.isEmpty()) {
             onDone(resolved)
