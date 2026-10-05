@@ -178,9 +178,13 @@ final class AppleProviderRuntimeV3 {
 
         Class<?> requesterType = moduleLoader.loadClass(
                 "io.github.andrealtb.coloroslyrics.provider.apple.AppleLyricRequester");
-        requester = requesterType
-                .getDeclaredConstructor(ClassLoader.class, Application.class)
-                .newInstance(hostLoader, application);
+        Constructor<?> requesterCtor = requesterType.getDeclaredConstructor(
+                ClassLoader.class,
+                Application.class,
+                Handler.class
+        );
+        requesterCtor.setAccessible(true);
+        requester = requesterCtor.newInstance(hostLoader, application, main);
         requesterSetLoadMethod = findMethod(requesterType, "setLoadLyricsMethod", 1);
         requesterRequestDownload = findMethod(requesterType, "requestDownload", 1);
 
@@ -535,9 +539,7 @@ final class AppleProviderRuntimeV3 {
         if (track == null) return;
 
         try {
-            if (applyTranslationMethod != null) {
-                applyTranslationMethod.invoke(parserInstance, songNative, "zh-Hans");
-            }
+            applyPreferredTranslation(songNative);
 
             Object song = parseSongMethod == null
                     ? null
@@ -742,6 +744,57 @@ final class AppleProviderRuntimeV3 {
                 track.album,
                 track.durationMs
         );
+    }
+
+    private void applyPreferredTranslation(Object songNative) {
+        try {
+            if (applyTranslationMethod != null) {
+                Object exact = applyTranslationMethod.invoke(parserInstance, songNative, "zh-Hans");
+                if (Boolean.TRUE.equals(exact)) return;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        Object vector = call(songNative, "getTranslationLanguages");
+        List<String> available = new ArrayList<>();
+        long size = number(call(vector, "size"));
+        for (long i = 0; i < Math.min(size, 128L); i++) {
+            Object value = call(vector, "get", i);
+            if (!(value instanceof String)) value = call(vector, "get", (int) i);
+            if (value instanceof String && !((String) value).trim().isEmpty()) {
+                available.add(((String) value).trim());
+            }
+        }
+
+        String selected = null;
+        for (String candidate : available) {
+            String normalized = candidate.replace('_', '-').toLowerCase(java.util.Locale.ROOT);
+            if (normalized.equals("zh-hans")) {
+                selected = candidate;
+                break;
+            }
+        }
+        if (selected == null) {
+            for (String candidate : available) {
+                String normalized = candidate.replace('_', '-').toLowerCase(java.util.Locale.ROOT);
+                if (normalized.startsWith("zh-hans") || normalized.equals("zh-cn")) {
+                    selected = candidate;
+                    break;
+                }
+            }
+        }
+        if (selected == null) {
+            for (String candidate : available) {
+                String normalized = candidate.replace('_', '-').toLowerCase(java.util.Locale.ROOT);
+                if (normalized.equals("zh") || normalized.startsWith("zh-")) {
+                    selected = candidate;
+                    break;
+                }
+            }
+        }
+        if (selected != null) {
+            call(songNative, "setTranslation", selected);
+        }
     }
 
     private Object unwrapSongInfo(Object ptr) {
