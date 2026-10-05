@@ -12,7 +12,6 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.reflect.Constructor;
@@ -42,9 +41,6 @@ final class AppleProviderRuntimeV3 {
     private static final String LYRIC_INFO = "lyricInfo";
     private static final String APPLE_MEDIA_PLAYBACK_SERVICE =
             "com.apple.android.music.player.MediaPlaybackService";
-    private static final long LEASE_HEARTBEAT_MS = 500L;
-    private static final long LEASE_PAST_MS = 750L;
-    private static final long LEASE_FUTURE_MS = 2_500L;
     private static final long TASK_PROBE_DELAY_MS = 1_200L;
     private static final int TASK_REMOVAL_CONFIRMATIONS = 2;
 
@@ -137,12 +133,8 @@ final class AppleProviderRuntimeV3 {
     private Object currentTrackIdentity;
     private long generation;
     private Object readyLines;
-    private long[] readyBegins;
-    private long[] readyEnds;
     private long readyGeneration;
     private long leaseEpoch;
-    private long heartbeatEpoch = -1L;
-    private String lastLeaseWindowKey;
 
     AppleProviderRuntimeV3(
             XposedModule module,
@@ -270,11 +262,10 @@ final class AppleProviderRuntimeV3 {
                     }
 
                     if (isTerminalPlaybackState(value)) {
-                        invalidateLease();
+                        invalidatePublication();
                         clearOwnedLyricsFromSession(session);
                     } else {
-                        publishLeaseIfPossible();
-                        scheduleLeaseHeartbeat();
+                        publishLyricsIfPossible();
                     }
                     return result;
                 });
@@ -294,8 +285,7 @@ final class AppleProviderRuntimeV3 {
                     if (!active) {
                         clearOwnedLyricsFromSession(session);
                     } else {
-                        publishLeaseIfPossible();
-                        scheduleLeaseHeartbeat();
+                        publishLyricsIfPossible();
                     }
                     return result;
                 });
@@ -310,7 +300,6 @@ final class AppleProviderRuntimeV3 {
                     synchronized (lock) {
                         sessions.remove(session);
                         leaseEpoch++;
-                        heartbeatEpoch = -1L;
                     }
                     return chain.proceed();
                 });
@@ -503,8 +492,6 @@ final class AppleProviderRuntimeV3 {
             if (resumed) {
                 lyricGate.invalidateCurrent();
                 leaseEpoch++;
-                heartbeatEpoch = -1L;
-                lastLeaseWindowKey = null;
             }
         }
 
@@ -524,13 +511,9 @@ final class AppleProviderRuntimeV3 {
 
             lyricGate.invalidateCurrent();
             readyLines = null;
-            readyBegins = null;
-            readyEnds = null;
             readyGeneration = 0L;
 
             leaseEpoch++;
-            heartbeatEpoch = -1L;
-            lastLeaseWindowKey = null;
         }
 
         // Do this synchronously while the Apple Music process/service is still alive so ColorOS
@@ -657,8 +640,7 @@ final class AppleProviderRuntimeV3 {
         }
 
         transitionTo(track, "media-session", true);
-        publishLeaseIfPossible();
-        scheduleLeaseHeartbeat();
+        publishLyricsIfPossible();
     }
 
     private void transitionTo(CanonicalTrack incoming, String source, boolean requestNow) {
@@ -680,12 +662,8 @@ final class AppleProviderRuntimeV3 {
             if (changed) {
                 lyricGate.bindGeneration(generation);
                 readyLines = null;
-                readyBegins = null;
-                readyEnds = null;
                 readyGeneration = 0L;
                 leaseEpoch++;
-                heartbeatEpoch = -1L;
-                lastLeaseWindowKey = null;
             }
         }
 
@@ -814,13 +792,9 @@ final class AppleProviderRuntimeV3 {
                 case NO_LYRICS:
                     synchronized (lock) {
                         readyLines = null;
-                        readyBegins = null;
-                        readyEnds = null;
-                        readyGeneration = 0L;
+                                readyGeneration = 0L;
                         leaseEpoch++;
-                        heartbeatEpoch = -1L;
-                        lastLeaseWindowKey = null;
-                    }
+                                }
                     clearOwnedLyricsFromSessions();
                     module.log(
                             Log.INFO,
@@ -875,13 +849,9 @@ final class AppleProviderRuntimeV3 {
                 if (!lyricGate.markNoLyrics(ticket)) return;
                 synchronized (lock) {
                     readyLines = null;
-                    readyBegins = null;
-                    readyEnds = null;
                     readyGeneration = 0L;
                     leaseEpoch++;
-                    heartbeatEpoch = -1L;
-                    lastLeaseWindowKey = null;
-                }
+                    }
                 clearOwnedLyricsFromSessions();
                 module.log(
                         Log.INFO,
@@ -896,30 +866,32 @@ final class AppleProviderRuntimeV3 {
             synchronized (lock) {
                 if (!lyricGate.accepts(ticket)) return;
                 readyLines = lines;
-                readyBegins = extractLineTimes(lines, "getBegin");
-                readyEnds = extractLineTimes(lines, "getEnd");
                 readyGeneration = ticket.generation;
                 leaseEpoch++;
-                heartbeatEpoch = -1L;
-                lastLeaseWindowKey = null;
             }
-            publishLeaseIfPossible();
-            scheduleLeaseHeartbeat();
+            publishLyricsIfPossible();
         } catch (Throwable error) {
             module.log(Log.ERROR, TAG, "lyrics callback parse failed", error);
         }
     }
 
-    private void publishLeaseIfPossible() {
-        final List<?> fullLines;
-        final List<?> leaseLines;
+    /**
+     * Publish the full lyric payload at most once for each live MediaMetadata object.
+     *
+     * The previous rolling-lease implementation rewrote MediaSession metadata every 500 ms and
+     * again at every lyric-window boundary. On Apple Music 6.5.3 this can race the playback
+     * service's own metadata/route work (especially around Dolby/variant transitions) and has been
+     * observed to leave playback paused. V3 alpha6 treats MediaSession as an event boundary, not a
+     * timer: publish on lyrics-ready or host metadata replacement, clear only on track/task/session
+     * termination.
+     */
+    private void publishLyricsIfPossible() {
+        final List<?> lines;
         final long gen;
         final long epoch;
         final Object trackIdentity;
         final MediaSession session;
         final MediaMetadata metadata;
-        final SessionState info;
-        final String windowKey;
 
         synchronized (lock) {
             if (!hostTaskPresent ||
@@ -928,35 +900,19 @@ final class AppleProviderRuntimeV3 {
                     currentTrackIdentity == null) {
                 return;
             }
+
             session = selectSessionLocked();
             if (session == null) return;
-            info = sessions.get(session);
+            SessionState info = sessions.get(session);
             if (info == null || info.metadata == null || !info.active) return;
             if (!validPlaybackState(info.playbackState)) return;
 
-            fullLines = (List<?>) readyLines;
-            long positionMs = estimatedPositionMs(info.playback);
-            leaseLines = leaseWindow(fullLines, positionMs);
-            if (leaseLines.isEmpty()) {
-                // Instrumental gap / no current lease: remove the previous module-owned payload.
-                // This is essential because ColorOS caches lyricInfo independently from the host.
-                if (clearOwnedLyricInfo(info.metadata)) {
-                    lastLeaseWindowKey = null;
-                    main.post(() -> writeSessionMetadata(session, info.metadata));
-                }
-                return;
-            }
+            // A host metadata replacement may drop lyricInfo; otherwise do not rewrite the
+            // MediaSession again for the same track.
+            if (isOwnedLyricInfo(info.metadata.getString(LYRIC_INFO))) return;
 
-            int first = fullLines.indexOf(leaseLines.get(0));
-            int last = fullLines.indexOf(leaseLines.get(leaseLines.size() - 1));
-            windowKey = generation + ":" + first + ":" + last;
-
-            // Do not churn MediaSession metadata when the lease window has not advanced.
-            if (windowKey.equals(lastLeaseWindowKey) &&
-                    isOwnedLyricInfo(info.metadata.getString(LYRIC_INFO))) {
-                return;
-            }
-
+            lines = (List<?>) readyLines;
+            if (lines.isEmpty()) return;
             metadata = info.metadata;
             gen = generation;
             epoch = leaseEpoch;
@@ -968,113 +924,33 @@ final class AppleProviderRuntimeV3 {
                     publisherInstance,
                     metadata,
                     trackIdentity,
-                    leaseLines,
+                    lines,
                     gen,
                     generationPolicy,
                     HOST,
                     HOST
             );
+
             synchronized (lock) {
-                if (gen != generation || epoch != leaseEpoch) return;
-                if (isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) {
-                    lastLeaseWindowKey = windowKey;
-                } else {
-                    return;
-                }
+                if (gen != generation || epoch != leaseEpoch || !hostTaskPresent) return;
+                if (!isOwnedLyricInfo(metadata.getString(LYRIC_INFO))) return;
             }
+
             writeSessionMetadata(session, metadata);
             module.log(
                     Log.INFO,
                     TAG,
-                    "lyrics lease published generation=" + gen +
-                            " window=" + windowKey +
-                            " lines=" + leaseLines.size()
+                    "lyrics published once generation=" + gen + " lines=" + lines.size()
             );
         } catch (Throwable error) {
-            module.log(Log.ERROR, TAG, "lyrics lease publication failed", error);
+            module.log(Log.ERROR, TAG, "lyrics publication failed", error);
         }
     }
 
-    private void scheduleLeaseHeartbeat() {
-        final long epoch;
-        final long gen;
-
-        synchronized (lock) {
-            if (!hostTaskPresent ||
-                    !(readyLines instanceof List) ||
-                    readyGeneration != generation ||
-                    lyricGate.phase() != AppleLyricGenerationGate.Phase.READY) {
-                return;
-            }
-            MediaSession session = selectSessionLocked();
-            if (session == null) return;
-            SessionState info = sessions.get(session);
-            if (info == null || !info.active ||
-                    info.playbackState != PlaybackState.STATE_PLAYING) {
-                return;
-            }
-
-            epoch = leaseEpoch;
-            gen = generation;
-            if (heartbeatEpoch == epoch) return;
-            heartbeatEpoch = epoch;
-        }
-
-        main.postDelayed(() -> {
-            synchronized (lock) {
-                if (heartbeatEpoch == epoch) heartbeatEpoch = -1L;
-                if (epoch != leaseEpoch || gen != generation) return;
-            }
-            publishLeaseIfPossible();
-            scheduleLeaseHeartbeat();
-        }, LEASE_HEARTBEAT_MS);
-    }
-
-    private void invalidateLease() {
+    private void invalidatePublication() {
         synchronized (lock) {
             leaseEpoch++;
-            heartbeatEpoch = -1L;
-            lastLeaseWindowKey = null;
         }
-    }
-
-    private List<?> leaseWindow(List<?> lines, long positionMs) {
-        if (lines.isEmpty() || readyBegins == null || readyEnds == null) return List.of();
-        AppleLyricLeasePolicy.Window window = AppleLyricLeasePolicy.select(
-                readyBegins,
-                readyEnds,
-                positionMs,
-                LEASE_PAST_MS,
-                LEASE_FUTURE_MS
-        );
-        if (window == null) return List.of();
-        return new ArrayList<>(lines.subList(window.first, window.last + 1));
-    }
-
-    private long[] extractLineTimes(List<?> lines, String getter) {
-        long[] values = new long[lines.size()];
-        for (int i = 0; i < lines.size(); i++) {
-            values[i] = number(call(lines.get(i), getter));
-        }
-        return values;
-    }
-
-    private long estimatedPositionMs(PlaybackState state) {
-        if (state == null) return 0L;
-        long position = Math.max(0L, state.getPosition());
-        if (state.getState() != PlaybackState.STATE_PLAYING) return position;
-
-        long updatedAt = state.getLastPositionUpdateTime();
-        if (updatedAt <= 0L) return position;
-        long elapsed = Math.max(0L, SystemClock.elapsedRealtime() - updatedAt);
-        float speed = state.getPlaybackSpeed();
-        return Math.max(0L, position + (long) (elapsed * speed));
-    }
-
-    private boolean isTerminalPlaybackState(int state) {
-        return state == PlaybackState.STATE_NONE ||
-                state == PlaybackState.STATE_STOPPED ||
-                state == PlaybackState.STATE_ERROR;
     }
 
     private MediaSession selectSessionLocked() {
