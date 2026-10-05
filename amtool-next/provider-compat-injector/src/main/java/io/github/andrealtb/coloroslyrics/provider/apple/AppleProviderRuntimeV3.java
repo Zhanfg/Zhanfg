@@ -122,6 +122,8 @@ final class AppleProviderRuntimeV3 {
     private Object currentTrackIdentity;
     private long generation;
     private Object readyLines;
+    private long[] readyBegins;
+    private long[] readyEnds;
     private long readyGeneration;
     private long leaseEpoch;
     private long heartbeatEpoch = -1L;
@@ -436,6 +438,8 @@ final class AppleProviderRuntimeV3 {
             if (changed) {
                 lyricGate.bindGeneration(generation);
                 readyLines = null;
+                readyBegins = null;
+                readyEnds = null;
                 readyGeneration = 0L;
                 leaseEpoch++;
                 heartbeatEpoch = -1L;
@@ -567,6 +571,8 @@ final class AppleProviderRuntimeV3 {
                 case NO_LYRICS:
                     synchronized (lock) {
                         readyLines = null;
+                        readyBegins = null;
+                        readyEnds = null;
                         readyGeneration = 0L;
                         leaseEpoch++;
                         heartbeatEpoch = -1L;
@@ -625,6 +631,8 @@ final class AppleProviderRuntimeV3 {
                 if (!lyricGate.markNoLyrics(ticket)) return;
                 synchronized (lock) {
                     readyLines = null;
+                    readyBegins = null;
+                    readyEnds = null;
                     readyGeneration = 0L;
                     leaseEpoch++;
                     heartbeatEpoch = -1L;
@@ -644,6 +652,8 @@ final class AppleProviderRuntimeV3 {
             synchronized (lock) {
                 if (!lyricGate.accepts(ticket)) return;
                 readyLines = lines;
+                readyBegins = extractLineTimes(lines, "getBegin");
+                readyEnds = extractLineTimes(lines, "getEnd");
                 readyGeneration = ticket.generation;
                 leaseEpoch++;
                 heartbeatEpoch = -1L;
@@ -775,37 +785,24 @@ final class AppleProviderRuntimeV3 {
     }
 
     private List<?> leaseWindow(List<?> lines, long positionMs) {
-        if (lines.isEmpty()) return List.of();
+        if (lines.isEmpty() || readyBegins == null || readyEnds == null) return List.of();
+        AppleLyricLeasePolicy.Window window = AppleLyricLeasePolicy.select(
+                readyBegins,
+                readyEnds,
+                positionMs,
+                LEASE_PAST_MS,
+                LEASE_FUTURE_MS
+        );
+        if (window == null) return List.of();
+        return new ArrayList<>(lines.subList(window.first, window.last + 1));
+    }
 
-        long startMs = Math.max(0L, positionMs - LEASE_PAST_MS);
-        long endMs = positionMs + LEASE_FUTURE_MS;
-        ArrayList<Object> window = new ArrayList<>();
-
-        for (Object line : lines) {
-            long begin = number(call(line, "getBegin"));
-            long end = number(call(line, "getEnd"));
-            if (end <= 0L) end = begin;
-            if (end >= startMs && begin <= endMs) {
-                window.add(line);
-            }
+    private long[] extractLineTimes(List<?> lines, String getter) {
+        long[] values = new long[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            values[i] = number(call(lines.get(i), getter));
         }
-
-        if (!window.isEmpty()) return window;
-
-        // Before the first line or inside a long instrumental gap, keep only the nearest next line.
-        Object nearest = null;
-        long nearestBegin = Long.MAX_VALUE;
-        for (Object line : lines) {
-            long begin = number(call(line, "getBegin"));
-            if (begin >= positionMs && begin < nearestBegin) {
-                nearest = line;
-                nearestBegin = begin;
-            }
-        }
-        if (nearest != null && nearestBegin <= positionMs + LEASE_FUTURE_MS) {
-            window.add(nearest);
-        }
-        return window;
+        return values;
     }
 
     private long estimatedPositionMs(PlaybackState state) {
