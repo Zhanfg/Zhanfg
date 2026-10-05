@@ -64,6 +64,7 @@ internal object AppleMusic653 {
 
     data class MediaApiAccess(
         val mediaApi: Any,
+        val storefrontField: Field,
         val directQuery: Method,
     )
 
@@ -237,13 +238,18 @@ internal object AppleMusic653 {
             ?: error("MediaApiRepositoryHolder#getMediaApi unavailable")
         val mediaApi = requireNotNull(getMediaApi.invoke(companion))
 
+        val storefrontField = findField(mediaApi.javaClass, "s")
+            ?.takeIf { it.type == String::class.java }
+            ?: error("MediaApi storefront field s unavailable")
+        storefrontField.isAccessible = true
+
         val direct = findMethod(mediaApi.javaClass, "v", 3) { method ->
             val p = method.parameterTypes
             p[0] == String::class.java &&
                 Map::class.java.isAssignableFrom(p[1]) &&
                 method.returnType == Any::class.java
         } ?: error("MediaApi#v(String,Map,Continuation) unavailable")
-        return MediaApiAccess(mediaApi, direct)
+        return MediaApiAccess(mediaApi, storefrontField, direct)
     }
 
     private fun findField(type: Class<*>, name: String): Field? {
