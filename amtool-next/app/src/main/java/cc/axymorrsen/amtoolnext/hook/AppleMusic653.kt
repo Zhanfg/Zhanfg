@@ -116,6 +116,22 @@ internal object AppleMusic653 {
         }
     }
 
+    fun translationSelectedGetter(loader: ClassLoader): Method? = runCatching {
+        loader.loadClass(APP_SHARED_PREFERENCES).declaredMethods.single { method ->
+            method.name == "isLyricsTranslationSelected" &&
+                method.parameterCount == 0 &&
+                method.returnType == Boolean::class.javaPrimitiveType
+        }.apply { isAccessible = true }
+    }.getOrNull()
+
+    fun pronunciationSelectedGetter(loader: ClassLoader): Method? = runCatching {
+        loader.loadClass(APP_SHARED_PREFERENCES).declaredMethods.single { method ->
+            method.name == "isLyricsPronunciationSelected" &&
+                method.parameterCount == 0 &&
+                method.returnType == Boolean::class.javaPrimitiveType
+        }.apply { isAccessible = true }
+    }.getOrNull()
+
     fun translationSetter(loader: ClassLoader): Method? = runCatching {
         loader.loadClass(APP_SHARED_PREFERENCES).declaredMethods.single { method ->
             method.name == "setLyricsTranslationSelected" &&
