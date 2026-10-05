@@ -22,6 +22,7 @@ internal class LyricsRuntime(
         installPreferredLanguages()
         installSystemLyricsLanguage()
         installSongInfoLanguageCompatibility()
+        installSelectionStateHooks()
         installTranslationPreferenceGuard()
     }
 
@@ -125,6 +126,44 @@ internal class LyricsRuntime(
                 "SongInfo translation compatibility failed: ${method.name}",
                 it,
             )
+        }
+    }
+
+    private fun installSelectionStateHooks() {
+        AppleMusic653.translationSelectedGetter(loader)?.let { getter ->
+            runCatching {
+                module.hook(getter)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                    .intercept { chain ->
+                        val config = HookConfigRuntime.current()
+                        if (config.enabled && config.autoTranslation) {
+                            true
+                        } else {
+                            chain.proceed()
+                        }
+                    }
+                logger(Log.INFO, "lyrics translation selected getter forced when enabled", null)
+            }.onFailure {
+                logger(Log.ERROR, "lyrics translation selected getter hook failed", it)
+            }
+        }
+
+        AppleMusic653.pronunciationSelectedGetter(loader)?.let { getter ->
+            runCatching {
+                module.hook(getter)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                    .intercept { chain ->
+                        val config = HookConfigRuntime.current()
+                        if (config.enabled && config.pronunciation) {
+                            true
+                        } else {
+                            chain.proceed()
+                        }
+                    }
+                logger(Log.INFO, "lyrics pronunciation selected getter forced when enabled", null)
+            }.onFailure {
+                logger(Log.ERROR, "lyrics pronunciation selected getter hook failed", it)
+            }
         }
     }
 
