@@ -1,9 +1,9 @@
-name: AMTool Next Build
+name: AMTool Next V3 Build
 
 on:
   push:
     branches:
-      - 'project/amtool-next-v2'
+      - 'project/amtool-next-v3'
     paths:
       - 'amtool-next/**'
       - '.github/workflows/amtool-next-build.yml'
@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -25,18 +25,26 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
-      - name: Build debug APKs
+      - name: Test and build V3
         working-directory: amtool-next
-        run: gradle --no-daemon :app:assembleDebug :provider-compat-injector:assembleDebug
-      - name: Upload AMTool APK
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:assembleDebug --stacktrace --console=plain
+      - name: Verify Xposed API 102 metadata
+        shell: bash
+        run: |
+          APK="$(find amtool-next/app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
+          unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
+          unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
+      - name: Upload AMTool V3
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-2.0.0-alpha3-hotfix6-debug
+          name: AMTool-Next-3.0.0-alpha1-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-      - name: Upload provider compatibility helper
+      - name: Upload Provider V3 injector
         uses: actions/upload-artifact@v4
         with:
-          name: Apple-Provider-AMTool-Compat-Hotfix2
+          name: Apple-Provider-AMTool-RuntimeV3-2.0.0-alpha1
           path: amtool-next/provider-compat-injector/build/outputs/apk/debug/*.apk
           if-no-files-found: error
