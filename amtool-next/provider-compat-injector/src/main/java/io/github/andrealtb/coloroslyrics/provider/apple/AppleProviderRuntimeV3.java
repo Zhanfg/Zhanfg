@@ -43,8 +43,6 @@ final class AppleProviderRuntimeV3 {
             "com.apple.android.music.player.MediaPlaybackService";
     private static final long TASK_PROBE_DELAY_MS = 1_200L;
     private static final int TASK_REMOVAL_CONFIRMATIONS = 2;
-    private static final long SYNTHETIC_LYRIC_GRACE_MS = 1_800L;
-    private static final long SYNTHETIC_LYRIC_TIMEOUT_MS = 8_000L;
 
     private static final class CanonicalTrack {
         final String id;
@@ -116,8 +114,6 @@ final class AppleProviderRuntimeV3 {
     private final Application application;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Object lock = new Object();
-    private final ThreadLocal<Boolean> moduleWrite = new ThreadLocal<>();
-    private final ThreadLocal<Boolean> ownLyricRequest = new ThreadLocal<>();
     private final AppleLyricGenerationGate lyricGate = new AppleLyricGenerationGate();
     private final WeakHashMap<Activity, Boolean> startedActivities = new WeakHashMap<>();
 
@@ -137,9 +133,6 @@ final class AppleProviderRuntimeV3 {
     private Object generationPolicy;
     private Method generationObserve;
     private Constructor<?> trackIdentityCtor;
-    private Object requester;
-    private Method requesterSetLoadMethod;
-    private Method requesterRequestDownload;
     private Method loadLyricsMethod;
     private Method parseSongMethod;
     private Method applyTranslationMethod;
