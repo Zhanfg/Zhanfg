@@ -77,17 +77,17 @@ private fun SettingsScreen() {
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "优先按同一 catalog ID 批量请求 CN/zh-CN，缺失时才回退 ISRC；直接覆盖 6.5.3 Artist Top Songs 显示模型", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "Artist 页直接复用 MediaEntity 的 ISRC 请求 CN/zh-CN；异步结果只触发一次合并后的模型重建，不再扫描 RecyclerView / TextView", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
-            ToggleRow("悬浮底栏", "将原生迷你播放器+导航合成一个悬浮圆角底栏；去掉外层色块，不再双卡重叠，也不做焦点热循环", config.floatingBottomBar) {
+            ToggleRow("悬浮底栏", "将原生迷你播放器+导航合成一个悬浮圆角 Dock；折叠态隐藏原生播放器背景层，保留系统 inset、原生手势与播放器展开动画", config.floatingBottomBar) {
                 update { it.copy(floatingBottomBar = !it.floatingBottomBar) }
             }
 
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "3.0.0-alpha3：中文 metadata 改为 20ms 合批、同 ID 直查 CN，ISRC 仅作缺失回退；Artist 页模型重建做帧级合并。悬浮底栏改成单一几何容器，移除 focus 重扫与双层 elevation。Türkiye 播放链仍完全不改。",
+                "3.0.0-alpha3：Artist Top Songs 改到同步模型构建缝隙，直接用 MediaEntity ISRC 查询中文 alias；移除 bind 热路径、ViewTree 扫描和重复整页重建。底栏改为单一原生 Dock，并随 PlayerActivity 原生 slide 进度恢复播放器背景。Türkiye 播放链仍完全不改。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
