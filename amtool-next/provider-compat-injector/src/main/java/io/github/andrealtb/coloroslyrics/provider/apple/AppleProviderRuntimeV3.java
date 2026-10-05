@@ -43,6 +43,8 @@ final class AppleProviderRuntimeV3 {
             "com.apple.android.music.player.MediaPlaybackService";
     private static final long TASK_PROBE_DELAY_MS = 1_200L;
     private static final int TASK_REMOVAL_CONFIRMATIONS = 2;
+    private static final long SYNTHETIC_LYRIC_GRACE_MS = 1_800L;
+    private static final long SYNTHETIC_LYRIC_TIMEOUT_MS = 8_000L;
 
     private static final class CanonicalTrack {
         final String id;
@@ -696,7 +698,7 @@ final class AppleProviderRuntimeV3 {
         }
 
         if (changed) {
-            clearOwnedLyricsFromSessions();
+            clearOwnedLyricsInMemory();
             module.log(
                     Log.INFO,
                     TAG,
@@ -704,7 +706,14 @@ final class AppleProviderRuntimeV3 {
                             " id=" + safe(current.id) + " title=" + safe(current.title)
             );
         }
-        if (requestNow) maybeRequestLyrics();
+        if (requestNow) {
+            AppleLyricGenerationGate.Ticket ticket = lyricGate.ticket();
+            main.postDelayed(() -> {
+                if (lyricGate.accepts(ticket)) {
+                    maybeRequestLyrics();
+                }
+            }, SYNTHETIC_LYRIC_GRACE_MS);
+        }
     }
 
     private void markHostLyricRequestInFlight() {
@@ -724,12 +733,14 @@ final class AppleProviderRuntimeV3 {
             playbackItems.put(track.id, item);
         }
 
+        // Cache only. A provider-owned lyric request is intentionally delayed by the
+        // generation grace window so playback/decoder startup is not disturbed.
         CanonicalTrack snapshot;
         synchronized (lock) {
             snapshot = current;
         }
         if (snapshot != null && snapshot.same(track)) {
-            maybeRequestLyrics();
+            return;
         }
     }
 
@@ -808,33 +819,23 @@ final class AppleProviderRuntimeV3 {
     }
 
     private void scheduleRequestTimeout(AppleLyricGenerationGate.Ticket ticket) {
-        final int attempt = lyricGate.attempts();
-        long delay = attempt <= 1 ? 650L : attempt == 2 ? 1400L : 2600L;
-
         main.postDelayed(() -> {
             AppleLyricGenerationGate.TimeoutAction action =
-                    lyricGate.onTimeout(ticket, 3);
-            switch (action) {
-                case IGNORE:
-                    return;
-                case NO_LYRICS:
-                    synchronized (lock) {
-                        readyLines = null;
-                                readyGeneration = 0L;
-                        leaseEpoch++;
-                                }
-                    clearOwnedLyricsFromSessions();
-                    module.log(
-                            Log.INFO,
-                            TAG,
-                            "lyrics resolved as unavailable generation=" + ticket.generation
-                    );
-                    return;
-                case RETRY:
-                    maybeRequestLyrics();
-                    return;
+                    lyricGate.onTimeout(ticket, 1);
+            if (action == AppleLyricGenerationGate.TimeoutAction.NO_LYRICS) {
+                synchronized (lock) {
+                    readyLines = null;
+                    readyGeneration = 0L;
+                    leaseEpoch++;
+                }
+                clearOwnedLyricsInMemory();
+                module.log(
+                        Log.INFO,
+                        TAG,
+                        "lyrics fallback timed out generation=" + ticket.generation
+                );
             }
-        }, delay);
+        }, SYNTHETIC_LYRIC_TIMEOUT_MS);
     }
 
     private void onLyricsBuilt(Object songNative) {
