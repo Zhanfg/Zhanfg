@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AMToolNext"
 include(":app")
+include(":provider-compat-injector")
