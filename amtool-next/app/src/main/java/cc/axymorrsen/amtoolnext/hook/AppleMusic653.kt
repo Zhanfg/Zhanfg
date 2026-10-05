@@ -28,7 +28,7 @@ internal object AppleMusic653 {
         "com.apple.android.music.profiles.BaseProfileEpoxyController"
     const val ARTIST_TOP_SONG_MODEL = "com.apple.android.music.e1"
     const val STACKED_NAVIGATION_HOLDER =
-        "com.apple.android.music.common.activity.PlayerActivity$StackedBottomNavigationHolder"
+        "com.apple.android.music.common.activity.PlayerActivity\$StackedBottomNavigationHolder"
 
     private val CONTENT_ITEM_CLASSES = listOf(
         "com.apple.android.music.model.BaseContentItem",
@@ -237,15 +237,6 @@ internal object AppleMusic653 {
         val catalogId = findMethod(playParams.javaClass, "getCatalogId", 0)
             ?.let { runCatching { it.invoke(playParams)?.toString()?.trim() }.getOrNull() }
         return catalogId?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
-    }
-
-    fun mediaEntityIsrc(entity: Any): String? {
-        val attributes = findMethod(entity.javaClass, "getAttributes", 0)
-            ?.let { runCatching { it.invoke(entity) }.getOrNull() }
-            ?: return null
-        return findMethod(attributes.javaClass, "getIsrc", 0)
-            ?.let { runCatching { it.invoke(attributes)?.toString()?.trim() }.getOrNull() }
-            ?.takeIf(String::isNotEmpty)
     }
 
     fun mediaApiAccess(loader: ClassLoader): MediaApiAccess {
