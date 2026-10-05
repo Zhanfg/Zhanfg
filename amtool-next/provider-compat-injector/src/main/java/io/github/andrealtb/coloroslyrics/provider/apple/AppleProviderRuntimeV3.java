@@ -407,10 +407,7 @@ final class AppleProviderRuntimeV3 {
             }
 
             if (changed) {
-                requestEpoch++;
-                requestAttempts = 0;
-                playbackPolls = 0;
-                lyricState = LyricState.EMPTY;
+                lyricGate.bindGeneration(generation);
                 pendingLines = null;
                 pendingGeneration = 0L;
             }
@@ -429,17 +426,13 @@ final class AppleProviderRuntimeV3 {
     }
 
     private void markHostLyricRequestInFlight() {
-        final long gen;
-        final long epoch;
+        final AppleLyricGenerationGate.Ticket ticket;
         synchronized (lock) {
             if (current == null) return;
-            if (lyricState == LyricState.READY || lyricState == LyricState.NO_LYRICS) return;
-            lyricState = LyricState.REQUESTING;
-            if (requestAttempts == 0) requestAttempts = 1;
-            gen = generation;
-            epoch = requestEpoch;
+            lyricGate.markHostRequestInFlight();
+            ticket = lyricGate.ticket();
         }
-        scheduleRequestTimeout(gen, epoch);
+        scheduleRequestTimeout(ticket);
     }
 
     private void cachePlaybackItem(Object item) {
@@ -448,6 +441,7 @@ final class AppleProviderRuntimeV3 {
         synchronized (lock) {
             playbackItems.put(track.id, item);
         }
+
         CanonicalTrack snapshot;
         synchronized (lock) {
             snapshot = current;
@@ -460,26 +454,32 @@ final class AppleProviderRuntimeV3 {
     private void maybeRequestLyrics() {
         final CanonicalTrack track;
         final Object item;
-        final long gen;
-        final long epoch;
+        final AppleLyricGenerationGate.Ticket ticket;
+        final int attempt;
 
         synchronized (lock) {
             track = current;
-            gen = generation;
             if (track == null || empty(track.id)) return;
-            if (lyricState == LyricState.READY || lyricState == LyricState.NO_LYRICS) return;
-            item = playbackItems.get(track.id);
-            if (item == null) {
-                schedulePlaybackPoll(gen, requestEpoch);
+
+            AppleLyricGenerationGate.Phase phase = lyricGate.phase();
+            if (phase == AppleLyricGenerationGate.Phase.READY ||
+                    phase == AppleLyricGenerationGate.Phase.NO_LYRICS) {
                 return;
             }
-            if (lyricState == LyricState.REQUESTING && requestAttempts > 0) return;
-            lyricState = LyricState.REQUESTING;
-            requestAttempts++;
-            epoch = requestEpoch;
+
+            item = playbackItems.get(track.id);
+            ticket = lyricGate.ticket();
+            if (item == null) {
+                schedulePlaybackPoll(ticket);
+                return;
+            }
+            if (!lyricGate.beginProviderRequest()) return;
+            attempt = lyricGate.attempts();
         }
 
         main.post(() -> {
+            if (!lyricGate.accepts(ticket)) return;
+
             boolean accepted = false;
             try {
                 ownLyricRequest.set(true);
@@ -490,64 +490,66 @@ final class AppleProviderRuntimeV3 {
             } finally {
                 ownLyricRequest.remove();
             }
+
             module.log(
                     Log.INFO,
                     TAG,
-                    "lyrics request generation=" + gen +
-                            " attempt=" + requestAttempts +
+                    "lyrics request generation=" + ticket.generation +
+                            " attempt=" + attempt +
                             " accepted=" + accepted
             );
-            scheduleRequestTimeout(gen, epoch);
+            scheduleRequestTimeout(ticket);
         });
     }
 
-    private void schedulePlaybackPoll(long gen, long epoch) {
-        final int poll;
-        synchronized (lock) {
-            if (generation != gen || requestEpoch != epoch) return;
-            if (playbackPolls >= 8) return;
-            playbackPolls++;
-            poll = playbackPolls;
-        }
+    private void schedulePlaybackPoll(AppleLyricGenerationGate.Ticket ticket) {
+        final int poll = lyricGate.nextPlaybackPoll(ticket, 8);
+        if (poll < 0) return;
 
         main.postDelayed(() -> {
+            if (!lyricGate.accepts(ticket)) return;
+
             boolean found;
             synchronized (lock) {
-                if (generation != gen || requestEpoch != epoch ||
-                        current == null || empty(current.id)) return;
+                if (current == null || empty(current.id)) return;
                 found = playbackItems.containsKey(current.id);
-                if (found) {
-                    lyricState = LyricState.EMPTY;
-                    playbackPolls = 0;
-                }
             }
+
             if (found) {
+                lyricGate.playbackItemFound(ticket);
                 maybeRequestLyrics();
             } else if (poll < 8) {
-                schedulePlaybackPoll(gen, epoch);
+                schedulePlaybackPoll(ticket);
             }
         }, 180L);
     }
 
-    private void scheduleRequestTimeout(long gen, long epoch) {
-        final int attempt;
-        synchronized (lock) {
-            attempt = requestAttempts;
-        }
-        long delay = attempt == 1 ? 650L : attempt == 2 ? 1400L : 2600L;
+    private void scheduleRequestTimeout(AppleLyricGenerationGate.Ticket ticket) {
+        final int attempt = lyricGate.attempts();
+        long delay = attempt <= 1 ? 650L : attempt == 2 ? 1400L : 2600L;
+
         main.postDelayed(() -> {
-            synchronized (lock) {
-                if (generation != gen || requestEpoch != epoch) return;
-                if (lyricState == LyricState.READY || lyricState == LyricState.NO_LYRICS) return;
-                if (requestAttempts >= 3) {
-                    lyricState = LyricState.NO_LYRICS;
-                    clearOwnedLyricsFromSessions();
-                    module.log(Log.INFO, TAG, "lyrics resolved as unavailable generation=" + gen);
+            AppleLyricGenerationGate.TimeoutAction action =
+                    lyricGate.onTimeout(ticket, 3);
+            switch (action) {
+                case IGNORE:
                     return;
-                }
-                lyricState = LyricState.EMPTY;
+                case NO_LYRICS:
+                    synchronized (lock) {
+                        pendingLines = null;
+                        pendingGeneration = 0L;
+                    }
+                    clearOwnedLyricsFromSessions();
+                    module.log(
+                            Log.INFO,
+                            TAG,
+                            "lyrics resolved as unavailable generation=" + ticket.generation
+                    );
+                    return;
+                case RETRY:
+                    maybeRequestLyrics();
+                    return;
             }
-            maybeRequestLyrics();
         }, delay);
     }
 
