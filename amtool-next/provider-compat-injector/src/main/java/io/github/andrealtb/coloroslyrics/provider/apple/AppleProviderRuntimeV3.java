@@ -282,9 +282,10 @@ final class AppleProviderRuntimeV3 {
                     synchronized (lock) {
                         sessionState(session).active = active;
                     }
-                    if (!active) {
-                        clearOwnedLyricsFromSession(session);
-                    } else {
+                    // setActive(false) can be transient while Apple swaps route/decoder/session
+                    // state (including Dolby/variant hand-offs). Never write metadata from that
+                    // transition. Session release/task removal/real STOPPED handle retraction.
+                    if (active) {
                         publishLyricsIfPossible();
                     }
                     return result;
