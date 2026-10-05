@@ -15,6 +15,9 @@ internal object AppleMusic653 {
         "com.apple.android.music.ttml.javanative.model.SongInfo\$SongInfoNative"
     const val APP_SHARED_PREFERENCES = "com.apple.android.music.utils.AppSharedPreferences"
     const val MEDIA_API_LOCALIZATION = "u8.E"
+    const val BASE_CONTENT_ITEM = "com.apple.android.music.model.BaseContentItem"
+    const val MEDIA_API_REPOSITORY_HOLDER =
+        "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder"
 
     // 6.5.3 amp-api final network interceptor.
     const val AMP_HTTP_INTERCEPTOR = "w8.d"
@@ -104,6 +107,79 @@ internal object AppleMusic653 {
                     method.returnType == Boolean::class.javaPrimitiveType
             }?.apply { isAccessible = true }
         }
+    }
+
+    fun contentItemGetterMethods(loader: ClassLoader): Map<String, Method> {
+        val type = loader.loadClass(BASE_CONTENT_ITEM)
+        val names = listOf(
+            "getTitle",
+            "getNowPlayingTitle",
+            "getArtistName",
+            "getNowPlayingSubtitle",
+            "getCollectionName",
+        )
+        return names.mapNotNull { name ->
+            findMethod(type, name, 0)?.takeIf { it.returnType == String::class.java }?.let { name to it }
+        }.toMap()
+    }
+
+    fun contentItemIdentityMethods(loader: ClassLoader): Map<String, Method> {
+        val type = loader.loadClass(BASE_CONTENT_ITEM)
+        return listOf(
+            "getSubscriptionStoreId",
+            "getId",
+        ).mapNotNull { name ->
+            findMethod(type, name, 0)?.let { name to it }
+        }.toMap()
+    }
+
+    fun contentItemNotifyChange(loader: ClassLoader): Method? =
+        findMethod(loader.loadClass(BASE_CONTENT_ITEM), "notifyChange", 0)
+
+    data class MediaApiAccess(
+        val mediaApi: Any,
+        val directQuery: Method,
+    )
+
+    fun mediaApiAccess(loader: ClassLoader): MediaApiAccess {
+        val holder = loader.loadClass(MEDIA_API_REPOSITORY_HOLDER)
+        val companionField = holder.declaredFields.firstOrNull { field ->
+            java.lang.reflect.Modifier.isStatic(field.modifiers) &&
+                field.type.name == "${holder.name}\$Companion"
+        } ?: error("MediaApiRepositoryHolder companion unavailable")
+        companionField.isAccessible = true
+        val companion = requireNotNull(companionField.get(null))
+        val getMediaApi = findMethod(companion.javaClass, "getMediaApi", 0)
+            ?: error("MediaApiRepositoryHolder#getMediaApi unavailable")
+        val mediaApi = requireNotNull(getMediaApi.invoke(companion))
+        val direct = findMethod(mediaApi.javaClass, "B", 3) { method ->
+            val p = method.parameterTypes
+            p[0] == String::class.java &&
+                Map::class.java.isAssignableFrom(p[1]) &&
+                p[2].name == "kotlin.coroutines.Continuation"
+        } ?: error("MediaApi#B(String,Map,Continuation) unavailable")
+        return MediaApiAccess(mediaApi, direct)
+    }
+
+    private fun findMethod(
+        type: Class<*>,
+        name: String,
+        parameterCount: Int,
+        extra: (Method) -> Boolean = { true },
+    ): Method? {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredMethods.firstOrNull { method ->
+                method.name == name &&
+                    method.parameterCount == parameterCount &&
+                    extra(method)
+            }?.let { method ->
+                method.isAccessible = true
+                return method
+            }
+            current = current.superclass
+        }
+        return null
     }
 
     fun translationSetter(loader: ClassLoader): Method? = runCatching {
