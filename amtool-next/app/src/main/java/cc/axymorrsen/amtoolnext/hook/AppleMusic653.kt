@@ -16,6 +16,14 @@ internal object AppleMusic653 {
     const val APP_SHARED_PREFERENCES = "com.apple.android.music.utils.AppSharedPreferences"
     const val MEDIA_API_LOCALIZATION = "u8.E"
     const val BASE_CONTENT_ITEM = "com.apple.android.music.model.BaseContentItem"
+    private val CONTENT_ITEM_CLASSES = listOf(
+        "com.apple.android.music.model.BaseContentItem",
+        "com.apple.android.music.model.BasePlaybackItem",
+        "com.apple.android.music.model.Song",
+        "com.apple.android.music.model.AlbumCollectionItem",
+        "com.apple.android.music.model.ArtistCollectionItem",
+        "com.apple.android.music.model.MusicVideo",
+    )
     const val MEDIA_API_REPOSITORY_HOLDER =
         "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder"
 
