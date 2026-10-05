@@ -143,7 +143,7 @@ internal class MetadataOverlayRuntime(
                         val model = chain.thisObject
                         val mediaId = model?.let { topSongModels[it] }
                         if (model != null && mediaId != null) {
-                            aliasOrRequest(mediaId, notify = null)?.let { alias ->
+                            aliasOrRequest(mediaId)?.let { alias ->
                                 applyTopSongAlias(model, alias)
                             }
                         }
