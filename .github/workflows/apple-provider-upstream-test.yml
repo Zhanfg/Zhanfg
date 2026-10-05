@@ -1,0 +1,56 @@
+name: Apple Provider Upstream Test
+
+on:
+  push:
+    branches:
+      - 'project/amtool-next-v3'
+    paths:
+      - '.github/workflows/apple-provider-upstream-test.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout provider upstream
+        uses: actions/checkout@v4
+        with:
+          repository: Andrea-lyz/ColorOS-Live-Lyrics-Providers
+          ref: 5af200a6e790f91815e77a92744b0bf3b0a24ce9
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+
+      - name: Build upstream Apple provider
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon             :player-apple:testDebugUnitTest             :player-apple:assembleDebug             :player-apple:verifyXposedApi102Resources             --stacktrace --console=plain
+
+      - name: Verify APK metadata
+        shell: bash
+        run: |
+          APK="$(find player-apple/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
+          unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
+          unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
+
+      - name: Upload upstream test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apple-Music-Lyric-Provider-Upstream-1.2.0-test
+          path: player-apple/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
