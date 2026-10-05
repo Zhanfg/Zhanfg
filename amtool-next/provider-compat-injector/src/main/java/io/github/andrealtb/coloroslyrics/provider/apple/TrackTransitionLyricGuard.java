@@ -77,7 +77,7 @@ final class TrackTransitionLyricGuard {
     private static String trackKey(MediaMetadata metadata) {
         String id = firstNonBlank(
                 metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
-                metadata.getString("com.apple.android.music.metadata.MEDIA_ID")
+                metadata.getString("com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID")
         );
         if (id != null) return "id:" + id.trim();
 
