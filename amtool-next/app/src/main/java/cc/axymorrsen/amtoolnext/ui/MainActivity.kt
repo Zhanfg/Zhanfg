@@ -58,9 +58,9 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix2", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · alpha3-hotfix3", style = MaterialTheme.typography.titleMedium)
             Text(
-                "保留 Türkiye 账号、订阅与播放授权。歌词始终走账号真实 storefront；歌曲/专辑展示信息改从中国大陆目录请求简体中文。",
+                "Türkiye 账号、订阅、播放对象和原生请求保持不变；中文标题改用独立 CN catalog 查询后，仅覆盖界面 getter 返回值。",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(18.dp))
@@ -77,14 +77,14 @@ private fun SettingsScreen() {
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "hotfix2 暂停原生 storefront 改写；后续改为旁路查询 + UI 覆盖，避免影响播放", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "CN 旁路查询 + UI 覆盖；不修改 playParams、availability 或原生 storefront", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
 
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "不会修改账号地区、DSID、订阅资格或播放 URL。hotfix2 完全停止修改 Apple Music 原生 catalog/editorial storefront。歌词语言增强继续保留；标题中文化改为旁路查询后再恢复。",
+                "hotfix3 只让 AMTool 自己发起的 metadata 查询进入 cn/zh-CN；Apple Music 自己的请求继续完整保持 Türkiye。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
