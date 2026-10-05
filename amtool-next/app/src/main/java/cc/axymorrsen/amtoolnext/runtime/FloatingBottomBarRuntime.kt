@@ -4,8 +4,6 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.View
@@ -14,22 +12,20 @@ import cc.axymorrsen.amtoolnext.config.HookConfigRuntime
 import cc.axymorrsen.amtoolnext.hook.AppleMusic653
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
-import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 /**
- * Low-overhead floating bottom chrome for Apple Music 6.5.3.
+ * Lightweight floating bottom chrome for Apple Music 6.5.3.
  *
- * alpha2 styled the mini player and tab bar as two independent capsules. On the stacked phone
- * host those two views share one fixed-height native holder, so margins/elevation made them collide
- * and exposed the artwork-tinted holder behind them. It also re-scanned/restyled on every window
- * focus change, causing layout churn.
+ * alpha2 restyled the navigation frame and mini-player independently on every focus event.
+ * That caused three visible problems on ColorOS:
+ * - two rounded cards visually overlapped;
+ * - the stock blue/root background remained visible behind them;
+ * - repeated margin/background writes forced layout + redraw and caused jank.
  *
- * alpha3 treats bottom_navigation_root_stacked as the only geometry owner: one floating card,
- * native mini-player + navigation remain vertically stacked inside it, and all inner native
- * backgrounds/seams are made transparent. Styling is identity/revision gated and installed from a
- * bounded resume retry only; no focus/pre-draw/global-layout hot loop exists.
+ * alpha3 treats the native mini-player + navigation as one visual shell split into two segments.
+ * The native geometry, player peek height, gestures and BottomSheetBehavior stay untouched.
  */
 internal class FloatingBottomBarRuntime(
     private val module: XposedModule,
@@ -40,6 +36,7 @@ internal class FloatingBottomBarRuntime(
         val elevation: Float,
         val translationZ: Float,
         val clipToOutline: Boolean,
+        val alpha: Float,
         val visibility: Int,
         val leftMargin: Int?,
         val topMargin: Int?,
@@ -47,242 +44,343 @@ internal class FloatingBottomBarRuntime(
         val bottomMargin: Int?,
     )
 
-    private data class ActivitySession(
-        val root: WeakReference<View>,
-        val revision: Long,
-        val enabled: Boolean,
+    private data class Session(
+        val activity: Activity,
+        val root: View,
+        val navFrame: View,
+        val navigation: View?,
+        val miniRoot: View?,
+        val miniSurface: View?,
+        val divider: View?,
+        val topShadow: View?,
+        val states: MutableMap<View, ViewState>,
+        var lastMiniVisible: Boolean? = null,
+        var enabled: Boolean = false,
+        var layoutListener: View.OnLayoutChangeListener? = null,
     )
 
-    private val main = Handler(Looper.getMainLooper())
-    private val states = WeakHashMap<View, ViewState>()
-    private val sessions = WeakHashMap<Activity, ActivitySession>()
-    private val retryGeneration = WeakHashMap<Activity, Long>()
-    private var generation = 0L
+    private val sessions = WeakHashMap<Activity, Session>()
+    private val retryCount = WeakHashMap<Activity, Int>()
 
     fun install() {
         runCatching {
             val postResume = Activity::class.java.getDeclaredMethod("onPostResume")
                 .apply { isAccessible = true }
+
             module.hook(postResume)
                 .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
                 .intercept { chain ->
                     val result = chain.proceed()
                     val activity = chain.thisObject as? Activity
-                    if (activity != null && activity.packageName == AppleMusic653.PACKAGE) {
-                        scheduleBoundedAttach(activity)
+                    if (activity?.packageName == AppleMusic653.PACKAGE) {
+                        activity.window.decorView.post { attachOrUpdate(activity) }
                     }
                     result
                 }
+
             logger(Log.INFO, "floating bottom chrome alpha3 hook installed", null)
         }.onFailure { error ->
-            logger(Log.ERROR, "floating bottom chrome alpha3 installation failed", error)
+            logger(Log.ERROR, "floating bottom chrome installation failed", error)
         }
     }
 
-    private fun scheduleBoundedAttach(activity: Activity) {
-        val token = synchronized(retryGeneration) {
-            generation += 1L
-            generation.also { retryGeneration[activity] = it }
+    private fun attachOrUpdate(activity: Activity) {
+        val existing = synchronized(sessions) { sessions[activity] }
+        if (existing != null && existing.root.isAttachedToWindow) {
+            applyEnabledState(existing)
+            return
         }
-        val delays = longArrayOf(0L, 48L, 144L, 320L)
-        delays.forEach { delay ->
-            main.postDelayed({
-                if (activity.isFinishing || activity.isDestroyed) return@postDelayed
-                val current = synchronized(retryGeneration) { retryGeneration[activity] }
-                if (current != token) return@postDelayed
-                if (applyIfReady(activity)) {
-                    synchronized(retryGeneration) {
-                        if (retryGeneration[activity] == token) retryGeneration.remove(activity)
-                    }
-                }
-            }, delay)
-        }
-    }
 
-    private fun applyIfReady(activity: Activity): Boolean {
         val root = find(activity, "bottom_navigation_root_stacked")
             ?: find(activity, "bottom_navigation_root_flat")
-            ?: return false
+        val navFrame = find(activity, "bottom_navigation_tabs_frame")
+            ?: find(activity, "bottom_navigation")
 
-        val config = HookConfigRuntime.current()
-        val enabled = config.enabled && config.floatingBottomBar
-        val previous = synchronized(sessions) { sessions[activity] }
-        if (
-            previous?.root?.get() === root &&
-            previous.revision == config.revision &&
-            previous.enabled == enabled
-        ) {
-            return true
-        }
-
-        if (!enabled) {
-            restoreOwnedViews()
-            synchronized(sessions) {
-                sessions[activity] = ActivitySession(WeakReference(root), config.revision, false)
+        if (root == null || navFrame == null) {
+            val attempt = (retryCount[activity] ?: 0) + 1
+            retryCount[activity] = attempt
+            if (attempt <= MAX_ATTACH_RETRIES) {
+                activity.window.decorView.postDelayed(
+                    { attachOrUpdate(activity) },
+                    ATTACH_RETRY_MS,
+                )
             }
-            return true
+            return
         }
 
-        styleRoot(activity, root)
+        retryCount.remove(activity)
+
+        val navigation = find(activity, "bottom_navigation")
+        val miniRoot = find(activity, "mini_player")
+            ?: find(activity, "mini_player_touch_panel")
+        val miniSurface = find(activity, "mini_player_content") ?: miniRoot
+        val divider = find(activity, "navigation_tabs_divider")
+        val topShadow = find(activity, "nav_tabs_top_shadow")
+
+        val states = LinkedHashMap<View, ViewState>()
+        listOfNotNull(
+            root,
+            navFrame,
+            navigation,
+            miniRoot,
+            miniSurface,
+            divider,
+            topShadow,
+        ).distinct().forEach { view ->
+            states[view] = capture(view)
+        }
+
+        val session = Session(
+            activity = activity,
+            root = root,
+            navFrame = navFrame,
+            navigation = navigation,
+            miniRoot = miniRoot,
+            miniSurface = miniSurface,
+            divider = divider,
+            topShadow = topShadow,
+            states = states,
+        )
+
+        val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (!session.enabled) return@OnLayoutChangeListener
+            val visible = miniVisible(session)
+            if (visible != session.lastMiniVisible) {
+                session.lastMiniVisible = visible
+                applySegmentShapes(session, visible)
+            }
+        }
+        session.layoutListener = layoutListener
+        miniRoot?.addOnLayoutChangeListener(layoutListener)
+
+        root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = Unit
+
+            override fun onViewDetachedFromWindow(v: View) {
+                session.layoutListener?.let { listener ->
+                    session.miniRoot?.removeOnLayoutChangeListener(listener)
+                }
+                synchronized(sessions) {
+                    if (sessions[activity] === session) sessions.remove(activity)
+                }
+            }
+        })
+
         synchronized(sessions) {
-            sessions[activity] = ActivitySession(WeakReference(root), config.revision, true)
+            sessions[activity] = session
         }
-
-        // Width/height and short holder ancestors are reliable only after layout. This is a
-        // one-shot post, not a permanent layout observer.
-        root.post {
-            if (root.isAttachedToWindow) {
-                clearShortChromeBackdrops(activity, root)
-            }
-        }
-        return true
+        applyEnabledState(session)
     }
 
-    private fun styleRoot(activity: Activity, root: View) {
-        val density = root.resources.displayMetrics.density
-        val surface = resolveSurfaceColor(activity)
-
-        save(root)
-        (root.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-            val side = dp(density, 12f)
-            val bottom = dp(density, 8f)
-            if (
-                params.leftMargin != side ||
-                params.rightMargin != side ||
-                params.bottomMargin != bottom
-            ) {
-                params.leftMargin = side
-                params.rightMargin = side
-                params.bottomMargin = bottom
-                root.layoutParams = params
-            }
-        }
-        root.background = capsule(surface, density, 28f)
-        root.elevation = 8f * density
-        root.translationZ = 0f
-        root.clipToOutline = true
-        if (root is ViewGroup) {
-            root.clipChildren = true
-            root.clipToPadding = false
+    private fun applyEnabledState(session: Session) {
+        val shouldEnable = HookConfigRuntime.current().let {
+            it.enabled && it.floatingBottomBar
         }
 
-        // One capsule owns the material. Native children keep sizing, click handling, menu state
-        // and player gestures, but stop painting rectangular layers behind the capsule.
-        listOf(
-            "mini_player",
-            "mini_player_touch_panel",
-            "mini_player_content",
-            "bottom_navigation_tabs_frame",
-            "bottom_navigation",
-        ).mapNotNull { find(activity, it) }.distinct().forEach(::clearBackground)
+        if (!shouldEnable) {
+            if (session.enabled) restore(session)
+            session.enabled = false
+            session.lastMiniVisible = null
+            return
+        }
 
-        listOf(
-            "navigation_tabs_divider",
-            "nav_tabs_top_shadow",
-        ).mapNotNull { find(activity, it) }.forEach(::hideSeam)
+        if (!session.enabled) {
+            applyStaticChrome(session)
+            session.enabled = true
+        }
 
-        logger(
-            Log.INFO,
-            "floating bottom chrome applied root=${root.javaClass.name}, revision=" +
-                HookConfigRuntime.revision(),
-            null,
-        )
+        val visible = miniVisible(session)
+        if (visible != session.lastMiniVisible) {
+            session.lastMiniVisible = visible
+            applySegmentShapes(session, visible)
+        }
     }
 
     /**
-     * Apple can paint the artwork tint on a short holder above the stacked root. Clear only
-     * ancestors whose measured height is close to the bottom chrome itself. This avoids touching
-     * the full player sheet/page background while removing the blue rectangular backdrop visible
-     * around the floating card.
+     * Static properties are written once per attached host view, not on focus/layout frames.
      */
-    private fun clearShortChromeBackdrops(activity: Activity, root: View) {
-        if (root.height <= 0) return
-        val decor = activity.window.decorView
-        val slack = dp(root.resources.displayMetrics.density, 72f)
-        val maxHeight = root.height + slack
-        var parent = root.parent as? View
-        var depth = 0
-        while (parent != null && parent !== decor && depth < 4) {
-            if (
-                parent.height in 1..maxHeight &&
-                parent.width >= (root.width - dp(root.resources.displayMetrics.density, 24f))
-            ) {
-                clearBackground(parent)
-                if (parent is ViewGroup) {
-                    parent.clipChildren = false
-                    parent.clipToPadding = false
-                }
-            }
-            parent = parent.parent as? View
-            depth += 1
+    private fun applyStaticChrome(session: Session) {
+        val density = session.root.resources.displayMetrics.density
+        val horizontal = (HORIZONTAL_MARGIN_DP * density).roundToInt()
+        val bottom = (BOTTOM_MARGIN_DP * density).roundToInt()
+
+        // Remove the stock full-width backing layers. These were the blue/grey slab visible
+        // behind alpha2's independent white capsules.
+        listOfNotNull(
+            session.root,
+            session.miniRoot,
+            session.navigation,
+        ).distinct().forEach { view ->
+            view.background = null
+        }
+
+        if (session.root is ViewGroup) {
+            session.root.clipChildren = false
+            session.root.clipToPadding = false
+        }
+        if (session.miniRoot is ViewGroup) {
+            session.miniRoot.clipChildren = false
+            session.miniRoot.clipToPadding = false
+        }
+
+        setHorizontalMargins(
+            view = session.navFrame,
+            horizontal = horizontal,
+            top = 0,
+            bottom = bottom,
+        )
+
+        session.miniSurface?.let { mini ->
+            setHorizontalMargins(
+                view = mini,
+                horizontal = horizontal,
+                top = (MINI_TOP_MARGIN_DP * density).roundToInt(),
+                bottom = 0,
+            )
+        }
+
+        listOfNotNull(session.divider, session.topShadow).forEach { seam ->
+            seam.visibility = View.GONE
+        }
+
+        session.navFrame.elevation = ELEVATION_DP * density
+        session.navFrame.translationZ = 0f
+        session.navFrame.clipToOutline = true
+
+        session.miniSurface?.let { mini ->
+            mini.elevation = ELEVATION_DP * density
+            mini.translationZ = 0f
+            mini.clipToOutline = true
         }
     }
 
-    private fun clearBackground(view: View) {
-        save(view)
-        if (view.background != null) view.background = null
-        view.elevation = 0f
-        view.translationZ = 0f
+    private fun applySegmentShapes(session: Session, miniVisible: Boolean) {
+        val density = session.root.resources.displayMetrics.density
+        val color = resolveSurfaceColor(session.activity)
+        val stroke = if (isLight(color)) 0x14000000 else 0x20FFFFFF
+
+        session.navFrame.background = roundedSurface(
+            color = color,
+            stroke = stroke,
+            density = density,
+            topRadiusDp = if (miniVisible) 0f else NAV_RADIUS_DP,
+            bottomRadiusDp = NAV_RADIUS_DP,
+        )
+
+        session.miniSurface?.let { mini ->
+            if (miniVisible) {
+                mini.background = roundedSurface(
+                    color = color,
+                    stroke = stroke,
+                    density = density,
+                    topRadiusDp = MINI_RADIUS_DP,
+                    bottomRadiusDp = 0f,
+                )
+                mini.alpha = 1f
+            } else {
+                // Keep the host's visibility semantics; just remove stale material.
+                mini.background = null
+            }
+        }
     }
 
-    private fun hideSeam(view: View) {
-        save(view)
-        if (view.visibility != View.GONE) view.visibility = View.GONE
+    private fun miniVisible(session: Session): Boolean {
+        val mini = session.miniRoot ?: session.miniSurface ?: return false
+        return mini.visibility == View.VISIBLE &&
+            mini.alpha > 0.01f &&
+            mini.height > 0 &&
+            mini.isShown
     }
 
-    private fun save(view: View) {
-        synchronized(states) {
-            if (states.containsKey(view)) return
-            val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
-            states[view] = ViewState(
-                background = view.background,
-                elevation = view.elevation,
-                translationZ = view.translationZ,
-                clipToOutline = view.clipToOutline,
-                visibility = view.visibility,
-                leftMargin = margins?.leftMargin,
-                topMargin = margins?.topMargin,
-                rightMargin = margins?.rightMargin,
-                bottomMargin = margins?.bottomMargin,
+    private fun setHorizontalMargins(
+        view: View,
+        horizontal: Int,
+        top: Int,
+        bottom: Int,
+    ) {
+        val params = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+        val left = horizontal
+        val right = horizontal
+        if (
+            params.leftMargin == left &&
+            params.rightMargin == right &&
+            params.topMargin == top &&
+            params.bottomMargin == bottom
+        ) {
+            return
+        }
+        params.setMargins(left, top, right, bottom)
+        view.layoutParams = params
+    }
+
+    private fun roundedSurface(
+        color: Int,
+        stroke: Int,
+        density: Float,
+        topRadiusDp: Float,
+        bottomRadiusDp: Float,
+    ): Drawable {
+        val top = topRadiusDp * density
+        val bottom = bottomRadiusDp * density
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadii = floatArrayOf(
+                top, top,
+                top, top,
+                bottom, bottom,
+                bottom, bottom,
+            )
+            setColor(color)
+            setStroke(
+                (0.5f * density).roundToInt().coerceAtLeast(1),
+                stroke,
             )
         }
     }
 
-    private fun restoreOwnedViews() {
-        synchronized(states) {
-            states.entries.toList().forEach { (view, state) ->
-                runCatching {
-                    view.background = state.background
-                    view.elevation = state.elevation
-                    view.translationZ = state.translationZ
-                    view.clipToOutline = state.clipToOutline
-                    view.visibility = state.visibility
-                    val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
-                    if (
-                        margins != null &&
-                        state.leftMargin != null &&
-                        state.topMargin != null &&
-                        state.rightMargin != null &&
-                        state.bottomMargin != null
-                    ) {
-                        if (
-                            margins.leftMargin != state.leftMargin ||
-                            margins.topMargin != state.topMargin ||
-                            margins.rightMargin != state.rightMargin ||
-                            margins.bottomMargin != state.bottomMargin
-                        ) {
-                            margins.setMargins(
-                                state.leftMargin,
-                                state.topMargin,
-                                state.rightMargin,
-                                state.bottomMargin,
-                            )
-                            view.layoutParams = margins
-                        }
-                    }
+    private fun capture(view: View): ViewState {
+        val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
+        return ViewState(
+            background = view.background,
+            elevation = view.elevation,
+            translationZ = view.translationZ,
+            clipToOutline = view.clipToOutline,
+            alpha = view.alpha,
+            visibility = view.visibility,
+            leftMargin = margins?.leftMargin,
+            topMargin = margins?.topMargin,
+            rightMargin = margins?.rightMargin,
+            bottomMargin = margins?.bottomMargin,
+        )
+    }
+
+    private fun restore(session: Session) {
+        session.states.forEach { (view, state) ->
+            runCatching {
+                view.background = state.background
+                view.elevation = state.elevation
+                view.translationZ = state.translationZ
+                view.clipToOutline = state.clipToOutline
+                view.alpha = state.alpha
+                view.visibility = state.visibility
+
+                val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
+                if (
+                    margins != null &&
+                    state.leftMargin != null &&
+                    state.topMargin != null &&
+                    state.rightMargin != null &&
+                    state.bottomMargin != null
+                ) {
+                    margins.setMargins(
+                        state.leftMargin,
+                        state.topMargin,
+                        state.rightMargin,
+                        state.bottomMargin,
+                    )
+                    view.layoutParams = margins
                 }
             }
-            states.clear()
         }
     }
 
@@ -292,17 +390,6 @@ internal class FloatingBottomBarRuntime(
         return activity.findViewById(id)
     }
 
-    private fun capsule(color: Int, density: Float, radiusDp: Float): Drawable =
-        GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusDp * density
-            setColor(color)
-            setStroke(
-                (0.5f * density).roundToInt().coerceAtLeast(1),
-                if (isLight(color)) 0x14000000 else 0x20FFFFFF,
-            )
-        }
-
     private fun resolveSurfaceColor(activity: Activity): Int {
         val value = TypedValue()
         val resolved = activity.theme.resolveAttribute(
@@ -310,26 +397,39 @@ internal class FloatingBottomBarRuntime(
             value,
             true,
         )
-        val base = if (!resolved) {
-            Color.WHITE
-        } else if (value.resourceId != 0) {
-            runCatching { activity.getColor(value.resourceId) }.getOrDefault(value.data)
-        } else {
-            value.data
+        val base = when {
+            !resolved -> Color.WHITE
+            value.resourceId != 0 -> runCatching {
+                activity.getColor(value.resourceId)
+            }.getOrDefault(value.data)
+            else -> value.data
         }
+
         return Color.argb(
-            252,
+            250,
             Color.red(base),
             Color.green(base),
             Color.blue(base),
         )
     }
 
-    private fun dp(density: Float, value: Float): Int = (value * density).roundToInt()
-
     private fun isLight(color: Int): Boolean {
         val luminance =
-            (0.2126 * Color.red(color) + 0.7152 * Color.green(color) + 0.0722 * Color.blue(color))
+            0.2126 * Color.red(color) +
+                0.7152 * Color.green(color) +
+                0.0722 * Color.blue(color)
         return luminance >= 128.0
+    }
+
+    companion object {
+        private const val HORIZONTAL_MARGIN_DP = 12f
+        private const val BOTTOM_MARGIN_DP = 8f
+        private const val MINI_TOP_MARGIN_DP = 4f
+        private const val NAV_RADIUS_DP = 28f
+        private const val MINI_RADIUS_DP = 22f
+        private const val ELEVATION_DP = 5f
+
+        private const val MAX_ATTACH_RETRIES = 6
+        private const val ATTACH_RETRY_MS = 120L
     }
 }
