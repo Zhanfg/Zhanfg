@@ -43,6 +43,8 @@ internal class FloatingBottomBarRuntime(
         val topMargin: Int?,
         val rightMargin: Int?,
         val bottomMargin: Int?,
+        val clipChildren: Boolean?,
+        val clipToPadding: Boolean?,
     )
 
     private data class Session(
@@ -249,7 +251,9 @@ internal class FloatingBottomBarRuntime(
         session.navFrame.clipToOutline = true
 
         session.miniSurface?.let { mini ->
-            mini.elevation = ELEVATION_DP * density
+            // A second elevated surface casts a shadow across the navigation segment and looks
+            // like an overlap seam. Keep the upper segment flat; the lower segment owns depth.
+            mini.elevation = 0f
             mini.translationZ = 0f
             mini.clipToOutline = true
         }
@@ -258,11 +262,8 @@ internal class FloatingBottomBarRuntime(
     private fun applySegmentShapes(session: Session, miniVisible: Boolean) {
         val density = session.root.resources.displayMetrics.density
         val color = resolveSurfaceColor(session.activity)
-        val stroke = if (isLight(color)) 0x14000000 else 0x20FFFFFF
-
         session.navFrame.background = roundedSurface(
             color = color,
-            stroke = stroke,
             density = density,
             topRadiusDp = if (miniVisible) 0f else NAV_RADIUS_DP,
             bottomRadiusDp = NAV_RADIUS_DP,
@@ -272,7 +273,6 @@ internal class FloatingBottomBarRuntime(
             if (miniVisible) {
                 mini.background = roundedSurface(
                     color = color,
-                    stroke = stroke,
                     density = density,
                     topRadiusDp = MINI_RADIUS_DP,
                     bottomRadiusDp = 0f,
@@ -316,7 +316,6 @@ internal class FloatingBottomBarRuntime(
 
     private fun roundedSurface(
         color: Int,
-        stroke: Int,
         density: Float,
         topRadiusDp: Float,
         bottomRadiusDp: Float,
@@ -332,10 +331,6 @@ internal class FloatingBottomBarRuntime(
                 bottom, bottom,
             )
             setColor(color)
-            setStroke(
-                (0.5f * density).roundToInt().coerceAtLeast(1),
-                stroke,
-            )
         }
     }
 
@@ -352,6 +347,8 @@ internal class FloatingBottomBarRuntime(
             topMargin = margins?.topMargin,
             rightMargin = margins?.rightMargin,
             bottomMargin = margins?.bottomMargin,
+            clipChildren = (view as? ViewGroup)?.clipChildren,
+            clipToPadding = (view as? ViewGroup)?.clipToPadding,
         )
     }
 
@@ -364,6 +361,10 @@ internal class FloatingBottomBarRuntime(
                 view.clipToOutline = state.clipToOutline
                 view.alpha = state.alpha
                 view.visibility = state.visibility
+                if (view is ViewGroup) {
+                    state.clipChildren?.let { view.clipChildren = it }
+                    state.clipToPadding?.let { view.clipToPadding = it }
+                }
 
                 val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
                 if (
@@ -412,14 +413,6 @@ internal class FloatingBottomBarRuntime(
             Color.green(base),
             Color.blue(base),
         )
-    }
-
-    private fun isLight(color: Int): Boolean {
-        val luminance =
-            0.2126 * Color.red(color) +
-                0.7152 * Color.green(color) +
-                0.0722 * Color.blue(color)
-        return luminance >= 128.0
     }
 
     companion object {
