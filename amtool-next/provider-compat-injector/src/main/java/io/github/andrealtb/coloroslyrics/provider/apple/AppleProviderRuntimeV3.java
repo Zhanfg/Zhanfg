@@ -40,6 +40,8 @@ final class AppleProviderRuntimeV3 {
     private static final String MEDIA_ID =
             "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String LYRIC_INFO = "lyricInfo";
+    private static final String APPLE_MEDIA_PLAYBACK_SERVICE =
+            "com.apple.android.music.player.MediaPlaybackService";
     private static final long LEASE_HEARTBEAT_MS = 500L;
     private static final long LEASE_PAST_MS = 750L;
     private static final long LEASE_FUTURE_MS = 2_500L;
@@ -371,7 +373,55 @@ final class AppleProviderRuntimeV3 {
                     return chain.proceed();
                 });
 
+        installExactApplePlaybackServiceLifecycleHooks();
+
         module.log(Log.INFO, TAG, "host task lifecycle hooks installed");
+    }
+
+    private void installExactApplePlaybackServiceLifecycleHooks() {
+        try {
+            Class<?> serviceType = hostLoader.loadClass(APPLE_MEDIA_PLAYBACK_SERVICE);
+
+            Method onTaskRemoved = findMethod(serviceType, "onTaskRemoved", 1);
+            if (onTaskRemoved != null &&
+                    onTaskRemoved.getParameterTypes()[0] == Intent.class) {
+                module.hook(onTaskRemoved)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                        .intercept(chain -> {
+                            // Before the service handles task removal (or stops itself), send the
+                            // explicit empty lyricInfo while its MediaSession is still valid.
+                            onHostTaskRemoved("apple-MediaPlaybackService-onTaskRemoved");
+                            return chain.proceed();
+                        });
+                module.log(
+                        Log.INFO,
+                        TAG,
+                        "exact Apple MediaPlaybackService#onTaskRemoved hook installed"
+                );
+            }
+
+            Method onDestroy = findMethod(serviceType, "onDestroy", 0);
+            if (onDestroy != null) {
+                module.hook(onDestroy)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                        .intercept(chain -> {
+                            onHostTaskRemoved("apple-MediaPlaybackService-onDestroy");
+                            return chain.proceed();
+                        });
+                module.log(
+                        Log.INFO,
+                        TAG,
+                        "exact Apple MediaPlaybackService#onDestroy hook installed"
+                );
+            }
+        } catch (Throwable error) {
+            module.log(
+                    Log.ERROR,
+                    TAG,
+                    "exact Apple MediaPlaybackService lifecycle hooks unavailable",
+                    error
+            );
+        }
     }
 
     private void scheduleTaskPresenceProbe() {
