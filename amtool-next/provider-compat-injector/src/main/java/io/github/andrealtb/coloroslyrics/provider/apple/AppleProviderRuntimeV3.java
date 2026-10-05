@@ -981,6 +981,13 @@ final class AppleProviderRuntimeV3 {
         }
     }
 
+    private boolean isTerminalPlaybackState(int state) {
+        // STATE_NONE can be transient during player/session hand-off. Treat only explicit
+        // STOPPED/ERROR as terminal; MediaSession.release() owns final teardown.
+        return state == PlaybackState.STATE_STOPPED ||
+                state == PlaybackState.STATE_ERROR;
+    }
+
     private MediaSession selectSessionLocked() {
         MediaSession fallback = null;
         for (Map.Entry<MediaSession, SessionState> entry : sessions.entrySet()) {
