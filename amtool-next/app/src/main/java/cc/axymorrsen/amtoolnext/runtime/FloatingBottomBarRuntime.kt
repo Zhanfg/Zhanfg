@@ -67,9 +67,10 @@ internal class FloatingBottomBarRuntime(
             save(root)
             val density = root.resources.displayMetrics.density
             (root.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
-                params.leftMargin = dp(root, DOCK_SIDE_DP)
-                params.rightMargin = dp(root, DOCK_SIDE_DP)
-                params.bottomMargin = dp(root, DOCK_BOTTOM_DP)
+                val baseline = states[root]
+                params.leftMargin = (baseline?.leftMargin ?: params.leftMargin) + dp(root, DOCK_SIDE_DP)
+                params.rightMargin = (baseline?.rightMargin ?: params.rightMargin) + dp(root, DOCK_SIDE_DP)
+                params.bottomMargin = (baseline?.bottomMargin ?: params.bottomMargin) + dp(root, DOCK_BOTTOM_DP)
                 root.layoutParams = params
             }
             root.background = dockDrawable(activity)
@@ -373,7 +374,7 @@ internal class FloatingBottomBarRuntime(
     }
 
     companion object {
-        private val RETRY_DELAYS_MS = longArrayOf(0L, 80L, 220L)
+        private val RETRY_DELAYS_MS = longArrayOf(0L, 80L, 220L, 500L)
         private const val DOCK_SIDE_DP = 10f
         private const val DOCK_BOTTOM_DP = 8f
         private const val DOCK_RADIUS_DP = 28f
