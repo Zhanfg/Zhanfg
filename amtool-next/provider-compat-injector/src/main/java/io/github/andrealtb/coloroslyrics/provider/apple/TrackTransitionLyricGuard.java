@@ -33,7 +33,10 @@ final class TrackTransitionLyricGuard {
             if (bundle == null) return false;
             String existing = bundle.getString(KEY);
             if (!isOwned(existing)) return false;
-            bundle.remove(KEY);
+            // ColorOS' lyric consumer treats an explicit empty lyricInfo as a retraction.
+            // Removing the key can leave the previously parsed provider payload alive in SystemUI
+            // until another metadata event arrives.
+            bundle.putCharSequence(KEY, "");
             return true;
         } catch (Throwable ignored) {
             return false;
