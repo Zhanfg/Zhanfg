@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha3", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha4", style = MaterialTheme.typography.titleMedium)
             Text(
                 "V3 将播放、歌词、中文 metadata 三条链彻底拆开：账号与播放始终保持 Türkiye；中文 metadata 只走模块自有请求；歌词只控制语言与展示。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -71,7 +71,7 @@ private fun SettingsScreen() {
             ToggleRow("中文原歌词优先", "请求 zh-Hans-CN / zh-Hans / zh-CN", config.chineseLyrics) {
                 update { it.copy(chineseLyrics = !it.chineseLyrics) }
             }
-            ToggleRow("自动显示官方翻译", "修正 Apple 的 zh-Hans ↔ zh-Hans-CN 可用性判断", config.autoTranslation) {
+            ToggleRow("自动显示官方翻译", "强制官方翻译选择状态，并兼容 zh-Hans ↔ zh-Hans-CN ↔ zh-CN", config.autoTranslation) {
                 update { it.copy(autoTranslation = !it.autoTranslation) }
             }
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
@@ -80,14 +80,14 @@ private fun SettingsScreen() {
             ToggleRow("歌曲信息优先中文", "Artist 页直接复用 MediaEntity 的 ISRC 请求 CN/zh-CN；异步结果只触发一次合并后的模型重建，不再扫描 RecyclerView / TextView", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
             }
-            ToggleRow("悬浮底栏", "将原生迷你播放器+导航合成一个悬浮圆角 Dock；折叠态隐藏原生播放器背景层，保留系统 inset、原生手势与播放器展开动画", config.floatingBottomBar) {
+            ToggleRow("悬浮底栏", "只悬浮原生导航栏；迷你播放器保持 Apple 原生布局，避免消失、重叠和重复 relayout", config.floatingBottomBar) {
                 update { it.copy(floatingBottomBar = !it.floatingBottomBar) }
             }
 
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "3.0.0-alpha3：Artist Top Songs 改到同步模型构建缝隙，直接用 MediaEntity ISRC 查询中文 alias；移除 bind 热路径、ViewTree 扫描和重复整页重建。底栏改为单一原生 Dock，并随 PlayerActivity 原生 slide 进度恢复播放器背景。Türkiye 播放链仍完全不改。",
+                "3.0.0-alpha4：修复官方中文翻译选择状态；悬浮底栏改成导航栏单独悬浮，不再改迷你播放器；配套 Provider alpha2 改用 500ms 心跳 + 2.5s 滚动歌词租约，应用被硬杀后 SystemUI 无法继续拿整首歌词播放。Türkiye 播放链仍完全不改。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
