@@ -43,7 +43,13 @@ internal class AmToolRuntimeV3(
             logger = logger,
         ).install()
 
-        logger(Log.INFO, "AMTool runtime v3 alpha5 installed", null)
+        FloatingBottomBarRuntimeV2(
+            module = module,
+            loader = loader,
+            logger = logger,
+        ).install()
+
+        logger(Log.INFO, "AMTool runtime v3 alpha8 installed", null)
     }
 
     companion object {
