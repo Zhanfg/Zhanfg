@@ -119,8 +119,12 @@ internal class MetadataOverlayRuntime(
                     }
 
                     val entity = chain.args.getOrNull(1) ?: return@intercept chain.proceed()
+                    RuntimeSignal.once("top-songs-hit", "AMTool：Top Songs 显示链已命中")
                     val mediaId = AppleMusic653.mediaEntityCatalogId(entity)
-                        ?: return@intercept chain.proceed()
+                        ?: run {
+                            RuntimeSignal.once("top-songs-no-id", "AMTool：Top Songs 命中，但取不到曲目 ID")
+                            return@intercept chain.proceed()
+                        }
                     val isrc = AppleMusic653.mediaEntityIsrc(entity)
                     chain.thisObject?.let { rememberTopSongController(mediaId, it) }
 
@@ -139,6 +143,7 @@ internal class MetadataOverlayRuntime(
                     model
                 }
 
+            RuntimeSignal.once("top-songs-installed", "AMTool：Top Songs Hook 已安装")
             logger(
                 Log.INFO,
                 "artist Top Songs projection installed at model-build seam=" +
@@ -188,6 +193,10 @@ internal class MetadataOverlayRuntime(
             }
 
             if (alias == null) {
+                RuntimeSignal.once(
+                    "metadata-miss",
+                    "AMTool：中文 metadata 请求已执行，但没有返回中文曲名",
+                )
                 logger(
                     Log.INFO,
                     "localized metadata miss id=$mediaId isrc=${isrcHint ?: "unknown"}",
@@ -196,6 +205,10 @@ internal class MetadataOverlayRuntime(
                 return@resolve
             }
 
+            RuntimeSignal.once(
+                "metadata-hit",
+                "AMTool：中文曲名已命中：${alias.title.take(24)}",
+            )
             notifyContentTargets(mediaId)
             refreshTopSongControllers(mediaId)
             logger(
