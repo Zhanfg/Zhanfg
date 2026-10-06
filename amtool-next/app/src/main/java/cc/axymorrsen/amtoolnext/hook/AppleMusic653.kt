@@ -27,6 +27,8 @@ internal object AppleMusic653 {
     const val ARTIST_BASE_CONTROLLER =
         "com.apple.android.music.profiles.BaseProfileEpoxyController"
     const val ARTIST_TOP_SONG_MODEL = "com.apple.android.music.e1"
+    const val PLAYER_ACTIVITY =
+        "com.apple.android.music.common.activity.PlayerActivity"
     const val STACKED_NAVIGATION_HOLDER =
         "com.apple.android.music.common.activity.PlayerActivity\$StackedBottomNavigationHolder"
 
@@ -209,6 +211,13 @@ internal object AppleMusic653 {
 
         return ArtistTopSongSurface(build, bind, title)
     }
+
+    fun playerActivityCreateStackedNavigationHolder(loader: ClassLoader): Method =
+        loader.loadClass(PLAYER_ACTIVITY).declaredMethods.single { method ->
+            method.name == "k1" &&
+                method.parameterCount == 0 &&
+                method.returnType.name == "com.apple.android.music.common.activity.PlayerActivity\$m"
+        }.apply { isAccessible = true }
 
     fun stackedNavigationSlide(loader: ClassLoader): Method =
         loader.loadClass(STACKED_NAVIGATION_HOLDER).declaredMethods.single { method ->
