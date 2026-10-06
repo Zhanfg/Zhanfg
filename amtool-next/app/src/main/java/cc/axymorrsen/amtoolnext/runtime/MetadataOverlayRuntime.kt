@@ -12,6 +12,7 @@ import java.lang.ref.WeakReference
 import java.lang.reflect.Method
 import java.util.Collections
 import java.util.WeakHashMap
+import java.lang.reflect.Field
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -52,8 +53,20 @@ internal class MetadataOverlayRuntime(
 
     private val topSongControllers =
         ConcurrentHashMap<String, MutableList<WeakReference<Any>>>()
+    private val topSongModels =
+        Collections.synchronizedMap(WeakHashMap<Any, String>())
     private val pendingControllerRebuilds =
         Collections.synchronizedMap(WeakHashMap<Any, Runnable>())
+
+    private data class BindingBridge(
+        val bindingClass: Class<*>,
+        val setVariable: Method,
+        val invalidateAll: Method?,
+        val executePending: Method?,
+        val titleVariableId: Int,
+    )
+
+    private val bindingBridge: BindingBridge? by lazy(::resolveBindingBridge)
 
     @Volatile
     private var topSongSurface: AppleMusic653.ArtistTopSongSurface? = null
@@ -122,37 +135,146 @@ internal class MetadataOverlayRuntime(
                     RuntimeSignal.once("top-songs-hit", "AMTool：Top Songs 显示链已命中")
                     val mediaId = AppleMusic653.mediaEntityCatalogId(entity)
                         ?: run {
-                            RuntimeSignal.once("top-songs-no-id", "AMTool：Top Songs 命中，但取不到曲目 ID")
+                            RuntimeSignal.once(
+                                "top-songs-no-id",
+                                "AMTool：Top Songs 命中，但取不到曲目 ID",
+                            )
                             return@intercept chain.proceed()
                         }
                     val isrc = AppleMusic653.mediaEntityIsrc(entity)
                     chain.thisObject?.let { rememberTopSongController(mediaId, it) }
 
                     val alias = aliasOrRequest(mediaId, isrc)
-                        ?: return@intercept chain.proceed()
-
-                    val snapshot = projectEntity(entity, alias)
+                    val snapshot = alias?.let { projectEntity(entity, it) }
                     val model = try {
                         chain.proceed()
                     } finally {
                         snapshot?.let(::restoreEntity)
                     }
 
-                    // Verified 6.5.3 fallback. It is executed once per model build, never per bind.
-                    if (model != null) applyTopSongModelAlias(model, alias)
+                    if (model != null) {
+                        topSongModels[model] = mediaId
+                        if (alias != null) {
+                            applyTopSongModelAlias(model, alias)
+                        }
+                    }
                     model
+                }
+
+            // This is the actual last model seam before DataBinding. Keep the hook tiny:
+            // one WeakHashMap lookup + cached alias lookup, no view-tree scan and no rebuild.
+            module.hook(surface.bindMethod)
+                .setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH)
+                .intercept { chain ->
+                    val model = chain.thisObject
+                    if (metadataEnabled() && model != null) {
+                        val mediaId = topSongModels[model]
+                        val alias = mediaId?.let(::cachedAlias)
+                        if (alias != null) {
+                            applyTopSongModelAlias(model, alias)
+                            applyTopSongBindingAlias(chain.args.getOrNull(1), alias)
+                        }
+                    }
+                    chain.proceed()
                 }
 
             RuntimeSignal.once("top-songs-installed", "AMTool：Top Songs Hook 已安装")
             logger(
                 Log.INFO,
-                "artist Top Songs projection installed at model-build seam=" +
-                    "${surface.buildMethod.declaringClass.name}#${surface.buildMethod.name}",
+                "artist Top Songs projection installed builder=" +
+                    "${surface.buildMethod.declaringClass.name}#${surface.buildMethod.name}, " +
+                    "binder=${surface.bindMethod.declaringClass.name}#${surface.bindMethod.name}",
                 null,
             )
         }.onFailure { error ->
             logger(Log.ERROR, "artist Top Songs projection failed", error)
         }
+    }
+
+    private fun cachedAlias(mediaId: String): CatalogSideChannel.Alias? =
+        (state[mediaId] as? State.Hit)?.alias
+
+    private fun applyTopSongBindingAlias(
+        holder: Any?,
+        alias: CatalogSideChannel.Alias,
+    ) {
+        holder ?: return
+        val bridge = bindingBridge ?: return
+        val binding = bindingFromHolder(holder, bridge.bindingClass) ?: return
+        val title = alias.title.trim().takeIf(String::isNotEmpty) ?: return
+
+        runCatching {
+            val applied = bridge.setVariable.invoke(
+                binding,
+                bridge.titleVariableId,
+                title,
+            ) == true
+            if (applied) {
+                bridge.invalidateAll?.invoke(binding)
+                bridge.executePending?.invoke(binding)
+                RuntimeSignal.once(
+                    "top-songs-binding",
+                    "AMTool：Top Songs DataBinding 中文标题已写入",
+                )
+            }
+        }.onFailure { error ->
+            logger(Log.ERROR, "artist Top Songs DataBinding projection failed", error)
+        }
+    }
+
+    private fun resolveBindingBridge(): BindingBridge? = runCatching {
+        val bindingClass = loader.loadClass("androidx.databinding.ViewDataBinding")
+        val setVariable = findMethod(bindingClass, "h0", 2) { method ->
+            method.parameterTypes[0] == Int::class.javaPrimitiveType
+        } ?: error("ViewDataBinding#h0(int,Object) unavailable")
+        val invalidate = findMethod(bindingClass, "A", 0)
+        val execute = findMethod(bindingClass, "n", 0)
+
+        val br = loader.loadClass("com.apple.android.music.playback.BR")
+        val titleField: Field = br.getDeclaredField("title").apply { isAccessible = true }
+        val titleVariableId = titleField.getInt(null)
+
+        BindingBridge(
+            bindingClass = bindingClass,
+            setVariable = setVariable,
+            invalidateAll = invalidate,
+            executePending = execute,
+            titleVariableId = titleVariableId,
+        )
+    }.onFailure { error ->
+        logger(Log.ERROR, "Top Songs DataBinding bridge unavailable", error)
+    }.getOrNull()
+
+    private fun bindingFromHolder(holder: Any, bindingClass: Class<*>): Any? =
+        generateSequence(holder.javaClass) { it.superclass }
+            .flatMap { type -> type.declaredFields.asSequence() }
+            .firstOrNull { field -> bindingClass.isAssignableFrom(field.type) }
+            ?.let { field ->
+                runCatching {
+                    field.isAccessible = true
+                    field.get(holder)
+                }.getOrNull()
+            }
+
+    private fun findMethod(
+        type: Class<*>,
+        name: String,
+        count: Int,
+        extra: (Method) -> Boolean = { true },
+    ): Method? {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredMethods.firstOrNull { method ->
+                method.name == name &&
+                    method.parameterCount == count &&
+                    extra(method)
+            }?.let { method ->
+                method.isAccessible = true
+                return method
+            }
+            current = current.superclass
+        }
+        return null
     }
 
     private fun metadataEnabled(): Boolean =
