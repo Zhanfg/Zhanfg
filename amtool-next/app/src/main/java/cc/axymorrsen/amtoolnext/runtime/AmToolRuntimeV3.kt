@@ -25,6 +25,8 @@ internal class AmToolRuntimeV3(
             }
         }
 
+        RuntimeSignal.once("runtime-installed", "AMTool V3 已注入 Apple Music")
+
         val catalog = CatalogSideChannel(module, loader, logger)
         catalog.installRouter()
 
