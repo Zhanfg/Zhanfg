@@ -54,7 +54,7 @@ jobs:
       - name: Upload AMTool V3
         uses: actions/upload-artifact@v4
         with:
-          name: AMTool-Next-3.0.0-alpha6-debug
+          name: AMTool-Next-3.0.0-alpha7-probe-debug
           path: amtool-next/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - name: Upload Provider V3 injector
