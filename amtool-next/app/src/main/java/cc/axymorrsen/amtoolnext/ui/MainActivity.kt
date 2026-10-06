@@ -58,7 +58,7 @@ private fun SettingsScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.height(10.dp))
-            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha7-probe", style = MaterialTheme.typography.titleMedium)
+            Text("Apple Music 6.5.3 (1599) · 3.0.0-alpha8", style = MaterialTheme.typography.titleMedium)
             Text(
                 "V3 将播放、歌词、中文 metadata 三条链彻底拆开：账号与播放始终保持 Türkiye；中文 metadata 只走模块自有请求；歌词只控制语言与展示。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -77,13 +77,16 @@ private fun SettingsScreen() {
             ToggleRow("发音 / 罗马音", "请求 zh-Latn / ja-Latn / ko-Latn", config.pronunciation) {
                 update { it.copy(pronunciation = !it.pronunciation) }
             }
-            ToggleRow("歌曲信息优先中文", "Artist 页直接复用 MediaEntity 的 ISRC 请求 CN/zh-CN；异步结果只触发一次合并后的模型重建，不再扫描 RecyclerView / TextView", config.chineseMetadata) {
+            ToggleRow("歌曲信息优先中文", "alpha8 补到 Top Songs 最后的 DataBinding 消费层；不扫描 View 树，不改播放对象", config.chineseMetadata) {
                 update { it.copy(chineseMetadata = !it.chineseMetadata) }
+            }
+            ToggleRow("悬浮底栏", "只悬浮底部导航；迷你播放器和 BottomSheet 保持 Apple 原生几何，避免重叠与卡顿", config.floatingBottomBar) {
+                update { it.copy(floatingBottomBar = !it.floatingBottomBar) }
             }
             Spacer(Modifier.height(20.dp))
             Text("当前配置修订：" + config.revision, style = MaterialTheme.typography.labelMedium)
             Text(
-                "3.0.0-alpha7-probe：不再盲猜。首次进入 Apple Music / Artist Top Songs / 中文 metadata 命中或失败时会各弹一次诊断提示，用来精确判断链路断在哪一层。悬浮底栏仍保持禁用，避免把之前的重叠和卡顿重新带回来。",
+                "3.0.0-alpha8：Top Songs 增加最终 e1#a + ViewDataBinding#h0 双重投影；悬浮底栏 V2 只处理导航 frame，不碰 mini-player、不挂 onSlide、不做全局布局扫描。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(28.dp))
