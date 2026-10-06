@@ -6,6 +6,7 @@ import android.util.Log
 import cc.axymorrsen.amtoolnext.hook.AppleMusic653
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.util.LinkedHashMap
 import java.util.LinkedHashSet
@@ -57,6 +58,7 @@ internal class CatalogSideChannel(
     private var flushScheduled = false
 
     private val requestStorefronts = ConcurrentHashMap<String, String>()
+    private val activeRequestStorefront = ThreadLocal<String?>()
 
     fun installRouter() {
         val methods = AppleMusic653.catalogRequestExecutors(loader)
@@ -310,14 +312,27 @@ internal class CatalogSideChannel(
                     ?: return@intercept chain.proceed()
 
                 val token = original[TOKEN]?.toString()
-                if (token != null) {
+                val tokenStorefront = token?.let(requestStorefronts::get)
+                val activeStorefront = activeRequestStorefront.get()
+                val targetStorefront = tokenStorefront ?: activeStorefront
+
+                if (targetStorefront != null) {
                     val args = chain.args.toTypedArray()
                     val query = LinkedHashMap<Any?, Any?>()
                     query.putAll(original)
                     query.remove(TOKEN)
                     query["l"] = LANGUAGE
                     args[target.queryIndex] = query
-                    requestStorefronts[token]?.let { args[3] = it }
+                    args[3] = targetStorefront
+
+                    RuntimeSignal.once(
+                        if (tokenStorefront != null) "catalog-route-token" else "catalog-route-thread",
+                        if (tokenStorefront != null) {
+                            "AMTool：CN metadata 已在 executor 按 request token 路由"
+                        } else {
+                            "AMTool：CN metadata 已在 executor 按当前调用线程路由"
+                        },
+                    )
                     return@intercept chain.proceed(args)
                 }
 
@@ -384,10 +399,15 @@ internal class CatalogSideChannel(
         }.also { main.postDelayed(it, QUERY_TIMEOUT_MS) }
 
         runCatching {
-            // Never mutate MediaApi's shared storefront field. The private token is carried
-            // through the direct query and the exact 6.5.3 executor rewrites only that request's
-            // storefront argument. Native playback/catalog requests therefore cannot observe CN.
-            access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
+            // Do not mutate MediaApi's shared storefront field. For synchronous executor paths,
+            // a ThreadLocal carries this module-owned request's target; for suspended/asynchronous
+            // paths the private query token carries it across threads.
+            if (targetStorefront != null) activeRequestStorefront.set(targetStorefront)
+            try {
+                access.directQuery.invoke(access.mediaApi, path, directQuery, continuation)
+            } finally {
+                activeRequestStorefront.remove()
+            }
         }.onSuccess { immediate ->
             if (!isCoroutineSuspended(immediate)) finish(immediate)
         }.onFailure { error ->
@@ -502,7 +522,22 @@ internal class CatalogSideChannel(
                 value.toString().contains("COROUTINE_SUSPENDED"))
 
     private fun isCoroutineFailure(value: Any?): Boolean =
-        value?.javaClass?.name == "kotlin.Result\$Failure"
+        coroutineResultFailure(value) != null
+
+    private fun coroutineResultFailure(value: Any?): Throwable? {
+        if (value is Throwable) return value
+        val result = value ?: return null
+        val fields = result.javaClass.declaredFields.filterNot { field ->
+            Modifier.isStatic(field.modifiers)
+        }
+        if (fields.size != 1) return null
+        val field = fields.single()
+        if (!Throwable::class.java.isAssignableFrom(field.type)) return null
+        return runCatching {
+            field.isAccessible = true
+            field.get(result) as? Throwable
+        }.getOrNull()
+    }
 
     private fun call(instance: Any, name: String, vararg args: Any?): Any? {
         var type: Class<*>? = instance.javaClass
