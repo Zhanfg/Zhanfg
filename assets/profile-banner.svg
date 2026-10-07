@@ -1,39 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="210" viewBox="0 0 960 210" role="img" aria-labelledby="title desc">
-  <title id="title">Axymorrsen</title>
-  <desc id="desc">Android and Linux systems, edge AI, and infrastructure tooling.</desc>
-  <style>
-    .bg{fill:#f6f8fa;stroke:#d0d7de}
-    .grid{stroke:#d8dee4}
-    .main{fill:#1f2328}
-    .muted{fill:#59636e}
-    .accent{stroke:#57606a}
-    .dot{fill:#57606a}
-    @media (prefers-color-scheme: dark){
-      .bg{fill:#0d1117;stroke:#30363d}
-      .grid{stroke:#21262d}
-      .main{fill:#f0f6fc}
-      .muted{fill:#8b949e}
-      .accent{stroke:#8b949e}
-      .dot{fill:#8b949e}
-    }
-  </style>
-
-  <rect class="bg" x="1" y="1" width="958" height="208" rx="18"/>
-
-  <g class="grid" stroke-width="1" opacity=".46">
-    <path d="M0 52.5H960M0 105H960M0 157.5H960"/>
-    <path d="M120 0V210M240 0V210M360 0V210M480 0V210M600 0V210M720 0V210M840 0V210"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="t d">
+<title id="t">Axymorrsen</title><desc id="d">Systems engineering, edge intelligence and infrastructure.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a0d12"/><stop offset="1" stop-color="#10151d"/></linearGradient>
+  <linearGradient id="sig" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#8b7cff"/><stop offset=".55" stop-color="#69b7ff"/><stop offset="1" stop-color="#5ee1c7"/></linearGradient>
+  <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M28 0H0V28" fill="none" stroke="#ffffff" stroke-opacity=".045" stroke-width="1"/></pattern>
+  <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="1200" height="320" rx="26" fill="url(#bg)"/>
+<rect width="1200" height="320" rx="26" fill="url(#grid)"/>
+<path d="M0 246H1200" stroke="#ffffff" stroke-opacity=".08"/>
+<path d="M56 54V220" stroke="url(#sig)" stroke-width="3"/>
+<circle cx="56" cy="54" r="4" fill="#8b7cff"/><circle cx="56" cy="220" r="4" fill="#5ee1c7"/>
+<text x="82" y="72" fill="#8d98a7" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="14" letter-spacing="3">AXM / 01</text>
+<text x="82" y="142" fill="#f2f5f8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="58" font-weight="680" letter-spacing="5">AXYMORRSEN</text>
+<text x="84" y="183" fill="#aab3bf" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="17" letter-spacing="1.5">systems engineering · edge intelligence · infrastructure</text>
+<text x="84" y="274" fill="#6f7a88" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="12" letter-spacing="2">BUILD  /  MEASURE  /  VERIFY  /  DOCUMENT</text>
+<g transform="translate(810 50)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="150" cy="110" r="82" stroke="#ffffff" stroke-opacity=".08"/>
+  <circle cx="150" cy="110" r="52" stroke="#ffffff" stroke-opacity=".12"/>
+  <path d="M26 166L94 126L150 64L212 96L278 44" stroke="url(#sig)" stroke-width="2.4" filter="url(#glow)"/>
+  <path d="M26 166L90 206L168 190L230 226" stroke="#ffffff" stroke-opacity=".16" stroke-width="1.2"/>
+  <path d="M94 126L168 190M150 64L230 226M212 96L278 164" stroke="#ffffff" stroke-opacity=".10" stroke-width="1"/>
+  <g fill="#0d1219" stroke-width="2">
+    <circle cx="26" cy="166" r="7" stroke="#8b7cff"/><circle cx="94" cy="126" r="7" stroke="#7b9dff"/>
+    <circle cx="150" cy="64" r="7" stroke="#69b7ff"/><circle cx="212" cy="96" r="7" stroke="#5fd0e0"/>
+    <circle cx="278" cy="44" r="7" stroke="#5ee1c7"/><circle cx="168" cy="190" r="6" stroke="#7a8798"/>
+    <circle cx="230" cy="226" r="6" stroke="#7a8798"/><circle cx="278" cy="164" r="6" stroke="#7a8798"/>
   </g>
-
-  <g fill="none" class="accent" stroke-width="1.5" opacity=".7">
-    <path d="M680 145 C720 145 725 100 765 100 S810 65 850 65"/>
-    <path d="M680 145 H635"/>
-  </g>
-  <circle class="dot" cx="635" cy="145" r="3.5"/>
-  <circle class="dot" cx="765" cy="100" r="3.5"/>
-  <circle class="dot" cx="850" cy="65" r="3.5"/>
-
-  <text class="main" x="48" y="92" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="42" font-weight="600" letter-spacing=".2">Axymorrsen</text>
-  <text class="muted" x="50" y="126" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="16" letter-spacing=".35">Android / Linux systems · edge AI · infrastructure</text>
-  <text class="muted" x="50" y="164" font-family="ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',monospace" font-size="12">build → measure → verify → document</text>
+  <text x="20" y="194" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">ANDROID</text>
+  <text x="132" y="43" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">EDGE</text>
+  <text x="250" y="27" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">INFRA</text>
+</g>
 </svg>
