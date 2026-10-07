@@ -1,50 +1,93 @@
-<h1 align="center">Axymorrsen</h1>
+<!-- reviewed against current public repositories: 2026-10-07 -->
 
 <p align="center">
-  Android/Linux systems · Kernel & root · Device trust · AI clients & agents · Build engineering
+  <img src="./assets/profile-banner.svg" alt="Axymorrsen — Android / Linux systems, edge AI and infrastructure" width="100%" />
 </p>
 
-I build practical systems software around Android and Linux, with current work spanning kernel engineering, root infrastructure, trusted execution, mobile AI clients, agent runtimes, audio stacks, networking and reproducible build systems.
+<p align="center">
+  <a href="https://axymorrsen.cc">axymorrsen.cc</a>
+  ·
+  <a href="https://github.com/ZhanfgBuild">build / upstream workspace</a>
+</p>
 
-## Current focus
+I work mostly on Android/Linux systems, edge inference, and developer infrastructure.  
+The common rule is simple: **build it, measure it, verify it, then document the boundary.**
 
-- **Kernel & root** — OnePlus 13 / OnePlus 6 kernels, KernelPatch/KPM, ReSukiSU/SUSFS, congestion control and reproducible build pipelines.
-- **TEE / device trust** — TEE simulation, Android RKP/StrongBox experiments and device-side trust infrastructure.
-- **AI clients & agents** — mobile-first AI clients, rootless agent runtimes, provider integration, tool execution and persistent environments.
-- **System extensions** — download acceleration, audio processing, lyrics/translation experiments and Android framework tooling.
-- **Engineering systems** — CI/CD, upstream tracking, source-base maintenance, deployment infrastructure and validation-first releases.
+## Selected work
 
-## Selected projects
+<table>
+<tr>
+<td width="50%" valign="top">
 
-| Project | Direction |
-| --- | --- |
-| [PatchNest Module](https://github.com/Zhanfg/PatchNest-Module) | KernelPatch/KPM-oriented Android system module and WebUI work |
-| [TEESimulator](https://github.com/Zhanfg/TEESimulator) | TEE simulation and Android trust-stack experiments |
-| [Android RKP Bridge](https://github.com/Zhanfg/Android-RKP-Bridge) | RKP / device attestation integration experiments |
-| [OnePlus 13 Kernel](https://github.com/Zhanfg/OnePlus13-kernel) | OnePlus 13 kernel integration, validation and release workflows |
-| [OnePlus 6 Kernel](https://github.com/Zhanfg/abk-op6-kernel) | OnePlus 6 kernel work with ReSukiSU/SUSFS-oriented build variants |
-| [TCP Optimiser](https://github.com/Zhanfg/TCP_Optimiser_RS) | Dynamic TCP tuning, congestion-control work and Android system integration |
-| [System Download Accelerator](https://github.com/Zhanfg/SystemDownloadAccelerator) | Android download-path acceleration and configurable system rules |
-| [Kelivo](https://github.com/Zhanfg/kelivo) | Mobile AI client with chat, story and agent-oriented workflows |
-| [Nova Agent](https://github.com/Zhanfg/nova-agent) | Agent runtime and mobile execution experiments |
-| [Rootless JamesDSP](https://github.com/Zhanfg/RootlessJamesDSP) | Rootless Android audio processing and DSP integration |
+<strong><a href="https://github.com/Zhanfg/Voxera">Voxera</a></strong><br>
+<sub>Offline semantic-prosodic voice conversion for edge devices. The native staged pipeline is in place; current M4 work exports and validates the ONNX deployment bundle contract.</sub><br><br>
+<code>pre-alpha · edge audio / ML</code>
 
-## Where things live
+</td>
+<td width="50%" valign="top">
 
-| Space | Role |
-| --- | --- |
-| [Zhanfg](https://github.com/Zhanfg) | Maintained products, representative research and user-facing projects |
-| [ZhanfgBuild](https://github.com/ZhanfgBuild) | Build/release infrastructure, source bases, upstream/reference forks and supporting engineering |
-| [axymorrsen.cc](https://axymorrsen.cc) | Project and writing hub |
+<strong><a href="https://github.com/Zhanfg/TCP_Optimiser_RS">TCP Optimiser RS</a></strong><br>
+<sub>Android TCP congestion-control module with a Rust core, network-aware policy application, runtime verification, and a Material Design 3 WebUI.</sub><br><br>
+<code>v3.0.0 · Android networking</code>
 
-This repository boundary is now the maintained layout. A small number of engineering-adjacent repositories intentionally remain under the personal namespace where that better fits their operational or project role.
+</td>
+</tr>
 
-## Working principles
+<tr>
+<td width="50%" valign="top">
 
-- Evidence before claims: distinguish verified behavior from planned or device-pending work.
-- Prefer small, reviewable changes with clear rollback paths.
-- Track upstream aggressively, but validate compatibility before integration.
-- Treat documentation, CI and reproducible builds as part of the implementation.
-- Keep credentials, tokens, private device data and unreleased material out of public repositories.
+<strong><a href="https://github.com/Zhanfg/OnePlus13-CameraBoost">OnePlus13 CameraBoost</a></strong><br>
+<sub>Clean-room OnePlus/OPlus camera capability research. Includes an official-source feature catalog plus guarded probe and 10-bit still enablement module variants.</sub><br><br>
+<code>research / validation · camera stack</code>
 
-中文交流 / English documentation welcome.
+</td>
+<td width="50%" valign="top">
+
+<strong><a href="https://github.com/Zhanfg/axymorrsen-infra-mcp">Axymorrsen Infra MCP</a></strong><br>
+<sub>Security-first MCP gateway with executable provider adapters, scoped OAuth/JWT authorization, safety modes, audit metadata, and reproducible release checks.</sub><br><br>
+<code>MCP · infrastructure</code>
+
+</td>
+</tr>
+
+<tr>
+<td width="50%" valign="top">
+
+<strong><a href="https://github.com/Zhanfg/Android-DataBackup">Android DataBackup</a></strong><br>
+<sub>Active maintenance work on the DataBackup codebase. Recent work reorganizes backup/restore architecture and adds the Rustic restore workflow with progress and result handling.</sub><br><br>
+<code>maintenance · Android backup</code>
+
+</td>
+<td width="50%" valign="top">
+
+<strong><a href="https://github.com/Zhanfg/Miband-OPlusBridge">Miband OPlusBridge</a></strong><br>
+<sub>Bridges supported Xiaomi bands into ColorOS Device Space and OPPO Health. Mi Band 11 is device-verified, with connection, health-data, notification, call, music, and background-recovery paths implemented.</sub><br><br>
+<code>device-verified · Android integration</code>
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><strong>More maintained / experimental work</strong></summary>
+<br>
+
+- **[OnePlus13-kernel](https://github.com/Zhanfg/OnePlus13-kernel)** — experimental OnePlus 13 OKI/kernel integration and validation workspace. Full build evidence exists; boot validation is still explicitly incomplete.
+- **[RootlessViPER4Android](https://github.com/Zhanfg/RootlessViPER4Android)** — rootless Android audio processing based on JamesDSP with native ViPER-style effects and a reorderable DSP chain.
+- **[workbench-extensions](https://github.com/Zhanfg/workbench-extensions)** — public Workbench extension distribution catalog; the current published catalog includes the novel-tool extension package.
+- **[UpstreamRadar](https://github.com/Zhanfg/UpstreamRadar)** — dependency-free Python scheduler for prioritizing upstream inspection under bounded time/API budgets.
+- **[susfs4ksu](https://github.com/Zhanfg/susfs4ksu)** — GitHub mirror and development entry point for SUSFS v2.3.0, preserving upstream branch history.
+
+</details>
+
+## Repository layout
+
+- **[Zhanfg](https://github.com/Zhanfg)** — public projects, device work, experiments, and maintained forks.
+- **[ZhanfgBuild](https://github.com/ZhanfgBuild)** — source bases, build/release infrastructure, upstream mirrors, and supporting engineering.
+- **[axymorrsen.cc](https://axymorrsen.cc)** — project and writing hub.
+
+## Working notes
+
+I keep experimental results labeled as experimental, and I do not treat a visible option, successful compile, or passing CI job as proof of device behavior. Public repositories should stay free of credentials, private device data, and proprietary blobs.
+
+<sub>中文交流 / English documentation.</sub>
