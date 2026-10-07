@@ -1,27 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="270" viewBox="0 0 1200 270" role="img" aria-labelledby="title desc">
-<title id="title">AXYMORRSEN</title>
-<desc id="desc">ANDROID / LINUX · EDGE ML · INFRASTRUCTURE</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="t d">
+<title id="t">AXYMORRSEN</title><desc id="d">Systems, edge inference, device research and infrastructure.</desc>
 <style>
-  .bg{fill:#f6f6f2}.ink{fill:#151719}.muted{fill:#6b7278}.line{stroke:#d7d9d8}.accent{fill:#526873}.ghost{fill:none;stroke:#151719;stroke-opacity:.09}.hair{stroke:#526873}
-  @media (prefers-color-scheme:dark){.bg{fill:#0d0f10}.ink{fill:#ececea}.muted{fill:#8d9499}.line{stroke:#292c2e}.ghost{stroke:#ececea;stroke-opacity:.09}}
+.bg{fill:#f2f1ec}.ink{fill:#111315}.muted{fill:#697077}.hair{stroke:#c9ccca}.accent{fill:#405f69}.accentLine{stroke:#405f69}
+@media(prefers-color-scheme:dark){.bg{fill:#0b0d0f}.ink{fill:#f0f0eb}.muted{fill:#8b9399}.hair{stroke:#2a2e31}.accent{fill:#76939b}.accentLine{stroke:#76939b}}
 </style>
-<defs><clipPath id="frame"><rect x="1" y="1" width="1198" height="268" rx="18"/></clipPath></defs>
-<g clip-path="url(#frame)">
-  <rect class="bg" width="1200" height="270"/>
-  <rect class="accent" x="0" y="0" width="7" height="270"/>
-  <line class="line" x1="52" y1="54" x2="1148" y2="54"/>
-  <text class="muted" x="54" y="42" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="11" letter-spacing="2.8">PERSONAL FOLIO / 00</text>
-  <text class="ink" x="52" y="132" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="52" font-weight="620" letter-spacing="3.2">AXYMORRSEN</text>
-  <text class="muted" x="54" y="169" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" letter-spacing="1.15">ANDROID / LINUX · EDGE ML · INFRASTRUCTURE</text>
-  <line class="line" x1="52" y1="216" x2="1148" y2="216"/>
-  <rect class="accent" x="54" y="235" width="82" height="4" rx="2"/>
-  <rect class="accent" x="144" y="235" width="28" height="4" rx="2" opacity=".55"/>
-  <rect class="accent" x="180" y="235" width="12" height="4" rx="2" opacity=".3"/>
-  <text class="muted" x="205" y="241" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10" letter-spacing="2">PUBLIC INDEX · 2026</text>
-  <text class="ghost" x="876" y="194" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="170" font-weight="700" stroke-width="2">00</text>
-  <line class="hair" x1="1096" y1="72" x2="1096" y2="194" stroke-width="2"/>
-  <circle class="accent" cx="1096" cy="72" r="3"/>
-  <circle class="accent" cx="1096" cy="194" r="3"/>
+<rect class="bg" width="1200" height="300"/>
+<line class="hair" x1="52" y1="42" x2="1148" y2="42"/>
+<line class="hair" x1="52" y1="254" x2="1148" y2="254"/>
+<text class="muted" x="52" y="30" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10" letter-spacing="2.4">AXY / PUBLIC WORK INDEX</text>
+<text class="ink" x="52" y="123" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="54" font-weight="650" letter-spacing="1.6">AXYMORRSEN</text>
+<text class="muted" x="54" y="158" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" letter-spacing=".8">ANDROID / LINUX · EDGE INFERENCE · DEVICE RESEARCH · INFRASTRUCTURE</text>
+<text class="muted" x="54" y="213" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="11" letter-spacing="1.3">evidence before claims  /  provenance stays visible  /  unfinished edges stay unfinished</text>
+<g transform="translate(865,72)">
+  <line class="hair" x1="0" y1="0" x2="0" y2="144"/>
+  <line class="hair" x1="54" y1="0" x2="54" y2="144"/>
+  <line class="hair" x1="108" y1="0" x2="108" y2="144"/>
+  <line class="hair" x1="162" y1="0" x2="162" y2="144"/>
+  <line class="accentLine" x1="0" y1="28" x2="162" y2="28" stroke-width="2"/>
+  <line class="accentLine" x1="54" y1="66" x2="162" y2="66" stroke-width="2"/>
+  <line class="accentLine" x1="108" y1="104" x2="162" y2="104" stroke-width="2"/>
+  <circle class="accent" cx="0" cy="28" r="4"/><circle class="accent" cx="54" cy="66" r="4"/><circle class="accent" cx="108" cy="104" r="4"/><circle class="accent" cx="162" cy="142" r="4"/>
+  <text class="muted" x="-4" y="162" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9">SYS</text>
+  <text class="muted" x="47" y="162" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9">EDGE</text>
+  <text class="muted" x="101" y="162" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9">DEV</text>
+  <text class="muted" x="151" y="162" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9">OPS</text>
 </g>
-<rect x="1" y="1" width="1198" height="268" rx="18" fill="none" class="line"/>
+<rect class="accent" x="52" y="272" width="34" height="4"/>
+<text class="muted" x="100" y="279" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9" letter-spacing="1.7">2026 / CURRENT SURFACE</text>
 </svg>
