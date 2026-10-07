@@ -1,34 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="t d">
-<title id="t">Axymorrsen</title><desc id="d">Systems engineering, edge intelligence and infrastructure.</desc>
-<defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a0d12"/><stop offset="1" stop-color="#10151d"/></linearGradient>
-  <linearGradient id="sig" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#8b7cff"/><stop offset=".55" stop-color="#69b7ff"/><stop offset="1" stop-color="#5ee1c7"/></linearGradient>
-  <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M28 0H0V28" fill="none" stroke="#ffffff" stroke-opacity=".045" stroke-width="1"/></pattern>
-  <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-</defs>
-<rect width="1200" height="320" rx="26" fill="url(#bg)"/>
-<rect width="1200" height="320" rx="26" fill="url(#grid)"/>
-<path d="M0 246H1200" stroke="#ffffff" stroke-opacity=".08"/>
-<path d="M56 54V220" stroke="url(#sig)" stroke-width="3"/>
-<circle cx="56" cy="54" r="4" fill="#8b7cff"/><circle cx="56" cy="220" r="4" fill="#5ee1c7"/>
-<text x="82" y="72" fill="#8d98a7" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="14" letter-spacing="3">AXM / 01</text>
-<text x="82" y="142" fill="#f2f5f8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="58" font-weight="680" letter-spacing="5">AXYMORRSEN</text>
-<text x="84" y="183" fill="#aab3bf" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="17" letter-spacing="1.5">systems engineering · edge intelligence · infrastructure</text>
-<text x="84" y="274" fill="#6f7a88" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="12" letter-spacing="2">BUILD  /  MEASURE  /  VERIFY  /  DOCUMENT</text>
-<g transform="translate(810 50)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="150" cy="110" r="82" stroke="#ffffff" stroke-opacity=".08"/>
-  <circle cx="150" cy="110" r="52" stroke="#ffffff" stroke-opacity=".12"/>
-  <path d="M26 166L94 126L150 64L212 96L278 44" stroke="url(#sig)" stroke-width="2.4" filter="url(#glow)"/>
-  <path d="M26 166L90 206L168 190L230 226" stroke="#ffffff" stroke-opacity=".16" stroke-width="1.2"/>
-  <path d="M94 126L168 190M150 64L230 226M212 96L278 164" stroke="#ffffff" stroke-opacity=".10" stroke-width="1"/>
-  <g fill="#0d1219" stroke-width="2">
-    <circle cx="26" cy="166" r="7" stroke="#8b7cff"/><circle cx="94" cy="126" r="7" stroke="#7b9dff"/>
-    <circle cx="150" cy="64" r="7" stroke="#69b7ff"/><circle cx="212" cy="96" r="7" stroke="#5fd0e0"/>
-    <circle cx="278" cy="44" r="7" stroke="#5ee1c7"/><circle cx="168" cy="190" r="6" stroke="#7a8798"/>
-    <circle cx="230" cy="226" r="6" stroke="#7a8798"/><circle cx="278" cy="164" r="6" stroke="#7a8798"/>
-  </g>
-  <text x="20" y="194" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">ANDROID</text>
-  <text x="132" y="43" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">EDGE</text>
-  <text x="250" y="27" fill="#687483" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10">INFRA</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="270" viewBox="0 0 1200 270" role="img" aria-labelledby="title desc">
+<title id="title">AXYMORRSEN</title>
+<desc id="desc">ANDROID / LINUX · EDGE ML · INFRASTRUCTURE</desc>
+<style>
+  .bg{fill:#f6f6f2}.ink{fill:#151719}.muted{fill:#6b7278}.line{stroke:#d7d9d8}.accent{fill:#526873}.ghost{fill:none;stroke:#151719;stroke-opacity:.09}.hair{stroke:#526873}
+  @media (prefers-color-scheme:dark){.bg{fill:#0d0f10}.ink{fill:#ececea}.muted{fill:#8d9499}.line{stroke:#292c2e}.ghost{stroke:#ececea;stroke-opacity:.09}}
+</style>
+<defs><clipPath id="frame"><rect x="1" y="1" width="1198" height="268" rx="18"/></clipPath></defs>
+<g clip-path="url(#frame)">
+  <rect class="bg" width="1200" height="270"/>
+  <rect class="accent" x="0" y="0" width="7" height="270"/>
+  <line class="line" x1="52" y1="54" x2="1148" y2="54"/>
+  <text class="muted" x="54" y="42" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="11" letter-spacing="2.8">PERSONAL FOLIO / 00</text>
+  <text class="ink" x="52" y="132" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="52" font-weight="620" letter-spacing="3.2">AXYMORRSEN</text>
+  <text class="muted" x="54" y="169" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" letter-spacing="1.15">ANDROID / LINUX · EDGE ML · INFRASTRUCTURE</text>
+  <line class="line" x1="52" y1="216" x2="1148" y2="216"/>
+  <rect class="accent" x="54" y="235" width="82" height="4" rx="2"/>
+  <rect class="accent" x="144" y="235" width="28" height="4" rx="2" opacity=".55"/>
+  <rect class="accent" x="180" y="235" width="12" height="4" rx="2" opacity=".3"/>
+  <text class="muted" x="205" y="241" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10" letter-spacing="2">PUBLIC INDEX · 2026</text>
+  <text class="ghost" x="876" y="194" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="170" font-weight="700" stroke-width="2">00</text>
+  <line class="hair" x1="1096" y1="72" x2="1096" y2="194" stroke-width="2"/>
+  <circle class="accent" cx="1096" cy="72" r="3"/>
+  <circle class="accent" cx="1096" cy="194" r="3"/>
 </g>
+<rect x="1" y="1" width="1198" height="268" rx="18" fill="none" class="line"/>
 </svg>
