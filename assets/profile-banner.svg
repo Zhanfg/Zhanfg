@@ -1,80 +1,75 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="220" viewBox="0 0 1400 220" role="img" aria-labelledby="title desc">
-  <title id="title">Axymorrsen</title>
-  <desc id="desc">A minimal animated Axymorrsen wordmark revealed from a vertical bar.</desc>
-
-  <style>
-    :root { color-scheme: light dark; }
-    .bar  { fill: #25282b; }
-    .name { fill: #17191b; }
-    @media (prefers-color-scheme: dark) {
-      .bar  { fill: #d8dadd; }
-      .name { fill: #f2f3f4; }
-    }
-  </style>
-
-  <defs>
-    <clipPath id="reveal">
-      <rect x="514" y="56" width="0" height="108" rx="2">
-        <animate
-          attributeName="width"
-          values="0;0;474;474;0;0"
-          keyTimes="0;0.07;0.23;0.82;0.93;1"
-          dur="7.4s"
-          calcMode="spline"
-          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
-          repeatCount="indefinite" />
-      </rect>
-    </clipPath>
-  </defs>
-
-  <g transform="translate(0,-2)">
-    <rect class="bar" x="468" y="73" width="4" height="70" rx="2">
-      <animate
-        attributeName="opacity"
-        values="0;1;1;1;0.72;1"
-        keyTimes="0;0.035;0.82;0.93;0.965;1"
-        dur="7.4s"
-        repeatCount="indefinite" />
-      <animate
-        attributeName="height"
-        values="18;70;70;70;52;18"
-        keyTimes="0;0.055;0.82;0.93;0.97;1"
-        dur="7.4s"
+<title id="title">Axymorrsen</title>
+<desc id="desc">A restrained animated Axymorrsen wordmark. A vertical mark resolves first, then the serif name is revealed from behind it.</desc>
+<style>
+  :root { color-scheme: light dark; }
+  .ink { fill:#171613; }
+  .bar { fill:#b45f43; }
+  @media (prefers-color-scheme:dark) {
+    .ink { fill:#f1eee7; }
+    .bar { fill:#d88b6d; }
+  }
+</style>
+<defs>
+  <clipPath id="reveal" clipPathUnits="userSpaceOnUse">
+    <rect x="458.00" y="43" width="0" height="134">
+      <animate attributeName="width"
+        values="0;0;508.91;508.91;0;0"
+        keyTimes="0;0.075;0.235;0.80;0.925;1"
+        dur="7.2s"
         calcMode="spline"
-        keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
-        repeatCount="indefinite" />
-      <animate
-        attributeName="y"
-        values="99;73;73;73;82;99"
-        keyTimes="0;0.055;0.82;0.93;0.97;1"
-        dur="7.4s"
-        calcMode="spline"
-        keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
-        repeatCount="indefinite" />
+        keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
+        repeatCount="indefinite"/>
     </rect>
+  </clipPath>
+</defs>
 
-    <g clip-path="url(#reveal)">
-      <text class="name" x="516" y="138"
-            font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-            font-size="70" font-weight="470" letter-spacing="4px">
-        <tspan font-weight="650">Axy</tspan><tspan font-weight="470">morrsen</tspan>
-        <animate
-          attributeName="x"
-          values="500;500;516;516;500;500"
-          keyTimes="0;0.07;0.23;0.82;0.93;1"
-          dur="7.4s"
-          calcMode="spline"
-          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
-          repeatCount="indefinite" />
-        <animate
-          attributeName="letter-spacing"
-          values="7.5px;7.5px;4px;4px;7.5px;7.5px"
-          keyTimes="0;0.07;0.23;0.82;0.93;1"
-          dur="7.4s"
-          calcMode="spline"
-          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
-          repeatCount="indefinite" />
-      </text>
-    </g>
+<rect class="bar" x="448" y="101" width="4" height="18" rx="2">
+  <animate attributeName="y"
+    values="101;72;72;72;83;101"
+    keyTimes="0;0.055;0.80;0.925;0.968;1"
+    dur="7.2s"
+    calcMode="spline"
+    keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
+    repeatCount="indefinite"/>
+  <animate attributeName="height"
+    values="18;76;76;76;54;18"
+    keyTimes="0;0.055;0.80;0.925;0.968;1"
+    dur="7.2s"
+    calcMode="spline"
+    keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
+    repeatCount="indefinite"/>
+  <animate attributeName="opacity"
+    values="0;1;1;1;.78;0"
+    keyTimes="0;0.035;0.80;0.925;0.968;1"
+    dur="7.2s"
+    repeatCount="indefinite"/>
+</rect>
+
+<g class="ink" clip-path="url(#reveal)">
+  <g>
+    <animateTransform attributeName="transform" type="translate"
+      values="-9 0;-9 0;0 0;0 0;4 0;4 0"
+      keyTimes="0;0.075;0.235;0.80;0.925;1"
+      dur="7.2s"
+      calcMode="spline"
+      keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
+      repeatCount="indefinite"/>
+    <animate attributeName="opacity"
+      values=".05;.05;1;1;.15;.05"
+      keyTimes="0;0.075;0.20;0.80;0.925;1"
+      dur="7.2s"
+      repeatCount="indefinite"/>
+    <path d="M-2 0V10H23Q56 10 70.5 22.5Q85 35 98 74L320 714H352L593 61Q604 29 615.5 19.5Q627 10 654 10H670V0H426V10H456Q494 10 507.0 18.0Q520 26 520 45Q520 57 514.0 79.0Q508 101 503 114L450 259H174L124 118Q120 105 113.5 83.5Q107 62 107 49Q107 28 124.0 19.0Q141 10 187 10H225V0ZM177 269H447L370 483Q354 529 337.5 576.5Q321 624 310 660Q299 626 284.0 582.0Q269 538 255 496Z" transform="translate(466.000 145) scale(0.086000 -0.086000)"/>
+    <path d="M1 0V10H24Q55 10 71.5 21.0Q88 32 111 66L248 271L117 475Q97 507 82.0 516.5Q67 526 38 526H23V536H243V526H226Q197 526 186.5 521.5Q176 517 176 507Q176 498 183.5 485.0Q191 472 203 452L290 318L373 444Q388 466 396.0 481.0Q404 496 404 505Q404 516 392.5 521.0Q381 526 351 526H303V536H503V526H491Q460 526 443.5 515.5Q427 505 404 470L296 308L456 61Q476 31 490.0 20.5Q504 10 531 10H538V0H311V10H340Q372 10 383.0 15.0Q394 20 394 31Q394 41 384.5 58.0Q375 75 359 98L254 261L142 92Q127 70 119.0 55.0Q111 40 111 31Q111 20 122.5 15.0Q134 10 164 10H221V0Z" transform="translate(524.312 145) scale(0.086000 -0.086000)"/>
+    <path d="M44 -230Q107 -230 145.5 -220.5Q184 -211 208.5 -188.5Q233 -166 251.5 -126.5Q270 -87 292 -27L84 474Q70 508 58.5 517.0Q47 526 19 526H7V536H217V526H202Q173 526 160.5 519.0Q148 512 148 495Q148 486 153.0 471.5Q158 457 169 430L248 233Q259 205 272.0 171.5Q285 138 297.5 106.0Q310 74 318 52Q329 86 341.0 120.5Q353 155 365 190L446 434Q452 452 456.0 467.0Q460 482 460 491Q460 509 447.5 517.5Q435 526 403 526H361V536H552V526H546Q521 526 507.0 521.5Q493 517 484.0 503.5Q475 490 466 462L314 5Q289 -70 268.0 -118.0Q247 -166 220.5 -192.5Q194 -219 154.0 -229.5Q114 -240 50 -240H44Z" transform="translate(570.672 145) scale(0.086000 -0.086000)"/>
+    <path d="M33 0V10H47Q96 10 111.5 24.5Q127 39 127 86V450Q127 496 111.5 511.0Q96 526 52 526H43V536H191V433H193Q212 493 253.0 518.5Q294 544 343 544Q403 544 441.0 515.0Q479 486 495 419H497Q513 489 554.0 516.5Q595 544 647 544Q730 545 769.5 496.5Q809 448 809 353V88Q809 40 824.5 25.0Q840 10 889 10H895V0H745V370Q745 449 719.5 487.5Q694 526 635 526Q567 526 534.5 480.5Q502 435 502 359V88Q502 40 517.0 25.0Q532 10 581 10H590V0H438V370Q438 449 412.0 487.5Q386 526 325 526Q258 526 224.5 476.0Q191 426 191 345V88Q191 40 206.5 25.0Q222 10 271 10H282V0Z" transform="translate(618.578 145) scale(0.086000 -0.086000)"/>
+    <path d="M277 -10Q176 -10 118.0 58.5Q60 127 60 268Q60 408 115.5 476.0Q171 544 281 544Q383 544 440.0 477.0Q497 410 497 268Q497 127 441.0 58.5Q385 -10 277 -10ZM278 0Q362 0 396.5 66.0Q431 132 431 268Q431 410 395.5 472.0Q360 534 280 534Q197 534 161.0 471.0Q125 408 125 268Q125 129 161.0 64.5Q197 0 278 0Z" transform="translate(697.703 145) scale(0.086000 -0.086000)"/>
+    <path d="M35 0V10H52Q96 10 111.5 25.0Q127 40 127 87V450Q127 497 111.5 511.5Q96 526 47 526H38V536H190V418H192Q200 447 216.0 476.5Q232 506 260.0 525.5Q288 545 332 545Q376 545 401.0 525.5Q426 506 426 474Q426 451 411.5 436.0Q397 421 363 421Q363 475 345.0 497.0Q327 519 298 519Q268 519 248.0 500.0Q228 481 215.5 449.0Q203 417 197.0 378.5Q191 340 191 302V90Q191 41 206.5 25.5Q222 10 266 10H289V0Z" transform="translate(745.516 145) scale(0.086000 -0.086000)"/>
+    <path d="M35 0V10H52Q96 10 111.5 25.0Q127 40 127 87V450Q127 497 111.5 511.5Q96 526 47 526H38V536H190V418H192Q200 447 216.0 476.5Q232 506 260.0 525.5Q288 545 332 545Q376 545 401.0 525.5Q426 506 426 474Q426 451 411.5 436.0Q397 421 363 421Q363 475 345.0 497.0Q327 519 298 519Q268 519 248.0 500.0Q228 481 215.5 449.0Q203 417 197.0 378.5Q191 340 191 302V90Q191 41 206.5 25.5Q222 10 266 10H289V0Z" transform="translate(783.438 145) scale(0.086000 -0.086000)"/>
+    <path d="M210 -10Q131 -10 92.5 21.0Q54 52 54 96Q54 127 69.0 139.5Q84 152 100 152Q100 77 123.0 38.5Q146 0 211 0Q267 0 297.5 31.5Q328 63 328 119Q328 149 318.5 169.0Q309 189 284.5 206.0Q260 223 215 244Q157 272 124.0 296.0Q91 320 77.0 347.5Q63 375 63 412Q63 474 106.0 509.0Q149 544 224 544Q294 544 329.0 514.5Q364 485 364 449Q364 426 351.0 412.0Q338 398 313 398Q313 475 290.0 504.5Q267 534 220 534Q168 534 142.0 507.0Q116 480 116 431Q116 397 130.5 375.5Q145 354 174.0 336.5Q203 319 245 299Q299 275 329.0 251.5Q359 228 370.5 201.5Q382 175 382 140Q382 69 335.0 29.5Q288 -10 210 -10Z" transform="translate(821.359 145) scale(0.086000 -0.086000)"/>
+    <path d="M280 -10Q177 -10 118.0 61.5Q59 133 59 263Q59 404 113.5 474.0Q168 544 268 544Q358 544 410.0 481.0Q462 418 462 299V280H125Q125 132 165.0 66.0Q205 0 282 0Q339 0 376.0 29.5Q413 59 426 114Q443 109 443 88Q443 69 425.0 46.0Q407 23 371.0 6.5Q335 -10 280 -10ZM394 290Q394 411 363.0 472.5Q332 534 266 534Q195 534 163.0 473.0Q131 412 126 290Z" transform="translate(858.344 145) scale(0.086000 -0.086000)"/>
+    <path d="M33 0V10H47Q81 10 98.0 16.5Q115 23 121.0 41.0Q127 59 127 94V443Q127 495 112.5 510.5Q98 526 53 526H38V536H191V435H193Q205 477 230.0 501.0Q255 525 286.0 534.5Q317 544 348 544Q436 544 477.5 498.0Q519 452 519 353V94Q519 59 524.5 41.0Q530 23 546.5 16.5Q563 10 595 10H605V0H455V380Q455 446 428.0 487.5Q401 529 335 529Q279 529 248.0 503.0Q217 477 204.0 436.5Q191 396 191 352V94Q191 59 197.0 41.0Q203 23 220.0 16.5Q237 10 270 10H280V0Z" transform="translate(902.547 145) scale(0.086000 -0.086000)"/>
   </g>
+</g>
 </svg>
