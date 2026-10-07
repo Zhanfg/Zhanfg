@@ -1,24 +1,80 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="t d">
-<title id="t">AXYMORRSEN</title><desc id="d">Public engineering index for systems, edge intelligence, device research and infrastructure.</desc>
-<style>
-.bg{fill:#f5f4ef}.ink{fill:#111315}.muted{fill:#697075}.hair{stroke:#c9cdca}.accent{fill:#506a70}.accentS{stroke:#506a70}
-@media(prefers-color-scheme:dark){.bg{fill:#0b0d0e}.ink{fill:#f1f1eb}.muted{fill:#8f979b}.hair{stroke:#2b3032}.accent{fill:#83a1a7}.accentS{stroke:#83a1a7}}
-</style>
-<rect class="bg" width="1200" height="280"/>
-<path class="hair" d="M48 36H1152M48 242H1152" stroke-width="1"/>
-<path class="accentS" d="M48 36V92" stroke-width="3"/>
-<text class="muted" x="68" y="56" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10" letter-spacing="2.8">AXY / PUBLIC WORK INDEX</text>
-<text class="ink" x="68" y="132" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="58" font-weight="680" letter-spacing="2.1">AXYMORRSEN</text>
-<text class="muted" x="70" y="166" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="14" letter-spacing="1.15">ANDROID / LINUX  ·  EDGE INTELLIGENCE  ·  DEVICE RESEARCH  ·  INFRASTRUCTURE</text>
-<text class="muted" x="70" y="218" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10.5" letter-spacing="1.3">BUILD / MEASURE / VERIFY / DOCUMENT</text>
-<g transform="translate(912 52)">
-  <rect x="0" y="0" width="180" height="148" fill="none" class="hair"/>
-  <path class="hair" d="M0 37H180M0 74H180M0 111H180M45 0V148M90 0V148M135 0V148"/>
-  <path class="accentS" d="M28 118L72 30L116 118M48 80H97M126 32L158 116M158 32L126 116" fill="none" stroke-width="3.2" stroke-linecap="square"/>
-  <rect class="accent" x="24" y="114" width="8" height="8"/>
-  <rect class="accent" x="154" y="28" width="8" height="8"/>
-  <text class="muted" x="0" y="168" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9" letter-spacing="1.5">FOLIO 00 / 2026.10</text>
-</g>
-<text class="muted" x="1052" y="260" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="9" letter-spacing="2">CURRENT</text>
-<rect class="accent" x="1127" y="251" width="25" height="3"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="220" viewBox="0 0 1400 220" role="img" aria-labelledby="title desc">
+  <title id="title">Axymorrsen</title>
+  <desc id="desc">A minimal animated Axymorrsen wordmark revealed from a vertical bar.</desc>
+
+  <style>
+    :root { color-scheme: light dark; }
+    .bar  { fill: #25282b; }
+    .name { fill: #17191b; }
+    @media (prefers-color-scheme: dark) {
+      .bar  { fill: #d8dadd; }
+      .name { fill: #f2f3f4; }
+    }
+  </style>
+
+  <defs>
+    <clipPath id="reveal">
+      <rect x="514" y="56" width="0" height="108" rx="2">
+        <animate
+          attributeName="width"
+          values="0;0;474;474;0;0"
+          keyTimes="0;0.07;0.23;0.82;0.93;1"
+          dur="7.4s"
+          calcMode="spline"
+          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
+          repeatCount="indefinite" />
+      </rect>
+    </clipPath>
+  </defs>
+
+  <g transform="translate(0,-2)">
+    <rect class="bar" x="468" y="73" width="4" height="70" rx="2">
+      <animate
+        attributeName="opacity"
+        values="0;1;1;1;0.72;1"
+        keyTimes="0;0.035;0.82;0.93;0.965;1"
+        dur="7.4s"
+        repeatCount="indefinite" />
+      <animate
+        attributeName="height"
+        values="18;70;70;70;52;18"
+        keyTimes="0;0.055;0.82;0.93;0.97;1"
+        dur="7.4s"
+        calcMode="spline"
+        keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
+        repeatCount="indefinite" />
+      <animate
+        attributeName="y"
+        values="99;73;73;73;82;99"
+        keyTimes="0;0.055;0.82;0.93;0.97;1"
+        dur="7.4s"
+        calcMode="spline"
+        keySplines="0.16 1 0.3 1;0 0 1 1;0 0 1 1;0.7 0 0.84 0;0.7 0 0.84 0"
+        repeatCount="indefinite" />
+    </rect>
+
+    <g clip-path="url(#reveal)">
+      <text class="name" x="516" y="138"
+            font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+            font-size="70" font-weight="470" letter-spacing="4px">
+        <tspan font-weight="650">Axy</tspan><tspan font-weight="470">morrsen</tspan>
+        <animate
+          attributeName="x"
+          values="500;500;516;516;500;500"
+          keyTimes="0;0.07;0.23;0.82;0.93;1"
+          dur="7.4s"
+          calcMode="spline"
+          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
+          repeatCount="indefinite" />
+        <animate
+          attributeName="letter-spacing"
+          values="7.5px;7.5px;4px;4px;7.5px;7.5px"
+          keyTimes="0;0.07;0.23;0.82;0.93;1"
+          dur="7.4s"
+          calcMode="spline"
+          keySplines="0 0 1 1;0.16 1 0.3 1;0 0 1 1;0.7 0 0.84 0;0 0 1 1"
+          repeatCount="indefinite" />
+      </text>
+    </g>
+  </g>
 </svg>
