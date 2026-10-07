@@ -1,78 +1,84 @@
-<p align="center"><img src="./assets/profile-banner.svg" alt="Axymorrsen" width="100%"></p>
-
 <p align="center">
-  <code>Android / Linux</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-  <code>edge ML</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-  <code>systems tooling</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-  <code>build engineering</code>
+  <img src="./assets/profile-banner.svg" alt="Axymorrsen — Android / Linux, edge ML and infrastructure" width="100%" />
 </p>
 
-I build systems that sit close to the device boundary: Android/Linux internals, local inference, networking, tooling, and infrastructure. Public pages stay evidence-first: experimental work is labeled as experimental, and upstream-derived work is kept separate from original projects.
+<p align="center">
+  <sub>systems work, kept explicit about provenance, validation and unfinished edges</sub>
+</p>
 
-### active build surfaces
+I work across Android/Linux systems, edge inference, device integration and developer infrastructure. Public repositories are treated as engineering records rather than feature brochures: upstream work stays attributed, experimental results stay labeled, and a successful build is not described as device validation.
+
+## 01 / primary work
 
 <table>
 <tr>
 <td width="50%" valign="top">
+<sub>EDGE AUDIO / ML</sub><br>
 <strong><a href="https://github.com/Zhanfg/Voxera">Voxera</a></strong><br>
-<sub>Offline semantic-prosodic voice conversion for edge devices. The native M1–M3 path is implemented; current M4 work builds and validates deployable ONNX runtime bundles.</sub><br><br>
-<code>pre-alpha / Python / ONNX</code>
+Compact offline semantic-prosodic voice conversion. The staged native path, prosody/semantic sidecars and test suite are present; current M4 work defines and verifies the ONNX deployment-bundle contract.<br><br>
+<code>pre-alpha · M4</code>
 </td>
 <td width="50%" valign="top">
-<strong><a href="https://github.com/Zhanfg/commeatus">Commeatus</a></strong><br>
-<sub>Experimental Rust proxy core built around a flow-centric policy model. Current main includes TCP/UDP paths, SOCKS5 and HTTP CONNECT, verified TLS, native Trojan, secure DNS, and Android/Linux transparent-proxy work.</sub><br><br>
-<code>0.6 alpha / Rust / networking</code>
+<sub>ANDROID AGENT RUNTIME</sub><br>
+<strong><a href="https://github.com/Zhanfg/nova-agent">Nova</a></strong><br>
+Android autonomous-agent runtime with provider routing, tool schemas, browser/device/accessibility paths, bounded root execution, skills and memory plumbing.<br><br>
+<code>Android · agent runtime</code>
 </td>
 </tr>
 <tr>
-<td valign="top">
-<strong><a href="https://github.com/Zhanfg/UpstreamRadar">UpstreamRadar</a></strong><br>
-<sub>Budget-aware upstream inspection and scheduling. The repository contains the SKOPRÆD scheduler, tests, a web surface, and Python/Rust/C++/Julia implementations used for conformance and experimentation.</sub><br><br>
-<code>active / algorithms / tooling</code>
+<td width="50%" valign="top">
+<sub>KERNELPATCH TOOLING</sub><br>
+<strong><a href="https://github.com/Zhanfg/PatchNest">PatchNest</a></strong><br>
+Consolidated KernelPatch user-space surface covering CLI, module/WebUI and KPM paths, with path-specific CI and validation contracts.<br><br>
+<code>CLI · module · KPM</code>
 </td>
-<td valign="top">
-<strong><a href="https://github.com/Zhanfg/axymorrsen-infra-mcp">Axymorrsen Infra MCP</a></strong><br>
-<sub>Security-first MCP gateway for developer infrastructure, with provider adapters, resource-scoped authorization, step-up policy, safety modes, audit events, and release verification.</sub><br><br>
-<code>0.9.0 / TypeScript / MCP</code>
-</td>
-</tr>
-<tr>
-<td valign="top">
+<td width="50%" valign="top">
+<sub>ANDROID NETWORKING</sub><br>
 <strong><a href="https://github.com/Zhanfg/TCP_Optimiser_RS">TCP Optimiser RS</a></strong><br>
-<sub>Android congestion-control module with a Rust daemon, adaptive interface handling, qdisc reconciliation, runtime capability checks, packaging validation, and a Material 3 WebUI.</sub><br><br>
-<code>3.0.0 / Rust / Android</code>
+Rust-based Android congestion-control module with interface-aware policies, runtime verification, statistics, recovery logic and a responsive WebUI.<br><br>
+<code>v3.0.0 · Rust</code>
 </td>
-<td valign="top">
+</tr>
+<tr>
+<td width="50%" valign="top">
+<sub>CAMERA RESEARCH</sub><br>
 <strong><a href="https://github.com/Zhanfg/OnePlus13-CameraBoost">OnePlus13 CameraBoost</a></strong><br>
-<sub>Clean-room OPlus camera research toolkit with an official-source feature catalog, capability probes, guarded OnePlus 13 targeting, and a 10-bit still configuration path.</sub><br><br>
-<code>research / Android / camera stack</code>
+Clean-room OPlus camera capability research with an official-source feature catalog, compatibility data, device probes and guarded 10-bit still gate experiments.<br><br>
+<code>research · validation-first</code>
+</td>
+<td width="50%" valign="top">
+<sub>DEVELOPER INFRASTRUCTURE</sub><br>
+<strong><a href="https://github.com/Zhanfg/axymorrsen-infra-mcp">Axymorrsen Infra MCP</a></strong><br>
+MCP gateway with provider adapters, scoped OAuth/JWT authorization, safety modes, audit metadata, remote/stdio transport bridging and release verification.<br><br>
+<code>MCP · security boundary</code>
 </td>
 </tr>
 </table>
 
-### validation-bound / experimental
+## 02 / maintained downstreams
 
-- **[OnePlus13-kernel](https://github.com/Zhanfg/OnePlus13-kernel)** — the official 6.6.118 OKI path has build evidence; the custom-common integration still has unresolved upstream conflicts and has not completed device boot validation.
-- **[BrepSight](https://github.com/Zhanfg/Brepsight)** — Flutter + native C++ mobile engineering/3D workspace. The viewport, native renderer, model-loading path and loss-aware export plumbing exist; optional exact-CAD/DCC providers remain capability-gated by their native SDKs.
-- **[OP13 FeatureLab](https://github.com/Zhanfg/OP13-FeatureLab)** — source-first ColorOS feature research with structural patching and semantic safety checks. There is no public flash-ready release; the previous v0.4.0 artifact remains explicitly do-not-flash.
-- **[PatchNest](https://github.com/Zhanfg/PatchNest)** — canonical monorepo for the PatchNest CLI, root module/WebUI and KPM workspace, with component-level CI and preserved imported history.
+These are explicitly downstream works, not presented as original upstream ownership.
 
-### maintained downstream work
+| Repository | Upstream boundary | Current local surface |
+| --- | --- | --- |
+| [Android-DataBackup](https://github.com/Zhanfg/Android-DataBackup) | fork of <code>XayahSuSuSu/Android-DataBackup</code> | backup/restore architecture work and Rustic restore path |
+| [Miband-OPlusBridge](https://github.com/Zhanfg/Miband-OPlusBridge) | fork of <code>MiaM1ku/Miband-OPlusBridge</code> | ColorOS / OPPO Health integration; Mi Band 11 path is device-verified |
+| [RootlessViPER4Android](https://github.com/Zhanfg/RootlessViPER4Android) | fork of <code>alienware377/RootlessViPER4Android</code> | rootless ViPER-style DSP work on the downstream audio branch |
+| [Bettbox](https://github.com/Zhanfg/Bettbox) | fork of <code>appshubcc/Bettbox</code> | maintained network-client downstream |
 
-Some repositories here are deliberate downstream maintenance rather than original upstream projects:
+## 03 / workspaces
 
-- [Android-DataBackup](https://github.com/Zhanfg/Android-DataBackup) ← `XayahSuSuSu/Android-DataBackup`
-- [Miband-OPlusBridge](https://github.com/Zhanfg/Miband-OPlusBridge) ← `MiaM1ku/Miband-OPlusBridge`
-- [RootlessViPER4Android](https://github.com/Zhanfg/RootlessViPER4Android) ← `alienware377/RootlessViPER4Android`
+<table>
+<tr>
+<td><strong><a href="https://github.com/ZhanfgBuild">ZhanfgBuild</a></strong><br><sub>source bases, CI/release plumbing and tracked upstreams</sub></td>
+<td><strong><a href="https://github.com/limbweave-lab">LimbWeave</a></strong><br><sub>modular wearable mechatronics engineering</sub></td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/nullweave-lab">nullweave</a></strong><br><sub>runtime-integrity and proof-systems research namespace</sub></td>
+<td><strong><a href="https://github.com/yuezhou-build">yuezhou-build</a></strong><br><sub>upstream tracking, maintenance and isolated experiments</sub></td>
+</tr>
+</table>
 
-The upstream relationship is part of the project identity, not something to hide.
-
-### spaces
-
-`Zhanfg` is the public project surface.  
-`ZhanfgBuild` holds source bases, build/release plumbing, and tracked upstream forks.  
-`nullweave-lab` is a narrow research namespace.  
-`limbweave-lab` is a private R&D workspace.  
-`yuezhou-build` is used as a low-profile build/mirror namespace.
-
-<p align="center"><sub><a href="https://axymorrsen.cc">axymorrsen.cc</a> · 中文交流 / English documentation</sub></p>
+<p align="center">
+  <sub><a href="https://axymorrsen.cc">axymorrsen.cc</a> · 中文交流 / English documentation</sub>
+</p>
