@@ -1,0 +1,69 @@
+name: AMTool Next V3 PR Build
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'amtool-next/**'
+      - '.github/workflows/amtool-next-pr-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amtool-next-v3-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+      - name: Install Android SDK 37
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.1'
+      - name: Test and build V3
+        working-directory: amtool-next
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :provider-compat-injector:testDebugUnitTest :provider-compat-injector:assembleDebug --stacktrace --console=plain
+      - name: Verify playback-safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n "storefrontField\.set" amtool-next/app/src/main/java/cc/axymorrsen/amtoolnext
+          ! grep -R -n -E "LEASE_HEARTBEAT_MS|scheduleLeaseHeartbeat\(|leaseWindow\(" amtool-next/provider-compat-injector/src/main/java
+          ! grep -R -n "requestDownload" amtool-next/provider-compat-injector/src/main/java/io/github/andrealtb/coloroslyrics/provider/apple/AppleProviderRuntimeV3.java
+          ! grep -R -n "session\.setMetadata" amtool-next/provider-compat-injector/src/main/java/io/github/andrealtb/coloroslyrics/provider/apple/AppleProviderRuntimeV3.java
+          ! grep -R -n "AppleLyricRequester" amtool-next/provider-compat-injector/src/main/java/io/github/andrealtb/coloroslyrics/provider/apple/AppleProviderRuntimeV3.java
+          ! grep -R -n "SYNTHETIC_LYRIC" amtool-next/provider-compat-injector/src/main/java/io/github/andrealtb/coloroslyrics/provider/apple/AppleProviderRuntimeV3.java
+          ! grep -R -n "setupLocalizedCalls" amtool-next/app/src/main/java/cc/axymorrsen/amtoolnext
+      - name: Verify AMTool Xposed API 102 metadata
+        shell: bash
+        run: |
+          APK="$(find amtool-next/app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -F "META-INF/xposed/java_init.list"
+          unzip -l "$APK" | grep -F "META-INF/xposed/module.prop"
+          unzip -l "$APK" | grep -F "META-INF/xposed/scope.list"
+      - name: Upload AMTool V3
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMTool-Next-3.0.0-alpha6-debug
+          path: amtool-next/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Upload Provider V3 injector
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apple-Provider-AMTool-RuntimeV3-2.0.0-alpha7
+          path: amtool-next/provider-compat-injector/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

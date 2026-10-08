@@ -1,0 +1,83 @@
+/*
+ * Copyright 2026 Andrea-TB
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+package io.github.andrealtb.coloroslyrics.provider.apple
+
+import android.media.MediaMetadata
+import io.github.andrealtb.coloroslyrics.provider.core.model.TrackIdentity
+import java.lang.reflect.Field
+
+object AppleTrackIdentity {
+    fun fromMetadata(metadata: MediaMetadata?): TrackIdentity? {
+        if (metadata == null) return null
+        val id = firstNotBlank(
+            metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            metadata.getString(ApplePlayerConstants.METADATA_KEY_MEDIA_ID)
+        )
+        return TrackIdentity(
+            id = id,
+            title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE),
+            artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
+        ).takeUnless { it.isBlank }
+    }
+
+    fun fromPlaybackItem(playbackItem: Any?): TrackIdentity? {
+        if (playbackItem == null) return null
+        val id = AppleNativeCalls.callString(playbackItem, "getId")
+        val title = firstNotBlank(
+            rawStringField(playbackItem, "name"),
+            AppleNativeCalls.callString(playbackItem, "getNowPlayingTitle"),
+            AppleNativeCalls.callString(playbackItem, "getTitle")
+        )
+        val artist = firstNotBlank(
+            rawStringField(playbackItem, "artistName"),
+            AppleNativeCalls.callString(playbackItem, "getArtistName"),
+            AppleNativeCalls.callString(playbackItem, "getNowPlayingSubtitle")
+        )
+        val album = firstNotBlank(
+            rawStringField(playbackItem, "collectionName"),
+            AppleNativeCalls.callString(playbackItem, "getCollectionName")
+        )
+        return TrackIdentity(
+            id = id,
+            title = title,
+            artist = artist,
+            album = album,
+            durationMs = normalizeDuration(
+                AppleNativeCalls.callLong(playbackItem, "getPlaybackDuration")
+            )
+        ).takeUnless { it.isBlank }
+    }
+
+    fun firstNotBlank(vararg values: String?): String? =
+        values.firstOrNull { !it.isNullOrBlank() }
+
+    fun normalizeDuration(duration: Long): Long {
+        if (duration <= 0L) return 0L
+        return if (duration < MAX_PLAUSIBLE_TRACK_SECONDS) duration * 1000L else duration
+    }
+
+    private fun rawStringField(instance: Any, name: String): String? =
+        findField(instance.javaClass, name)?.let { field ->
+            runCatching {
+                field.isAccessible = true
+                (field.get(instance) as? String)?.trim()?.takeIf(String::isNotEmpty)
+            }.getOrNull()
+        }
+
+    private fun findField(type: Class<*>, name: String): Field? {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredFields.firstOrNull { it.name == name }?.let { return it }
+            current = current.superclass
+        }
+        return null
+    }
+
+    private const val MAX_PLAUSIBLE_TRACK_SECONDS = 10_000L
+}

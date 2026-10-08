@@ -1,0 +1,4 @@
+-keep class cc.axymorrsen.amtoolnext.hook.AmToolModule { *; }
+-keep class cc.axymorrsen.amtoolnext.compat.** { *; }
+-dontwarn de.robv.android.xposed.**
+-dontwarn com.highcapable.yukihookapi.**
